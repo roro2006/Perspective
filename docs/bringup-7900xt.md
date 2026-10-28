@@ -55,11 +55,72 @@ colours perfectly, guesses on left/right, and ignores where the person is
 looking. Deictic and relation are what the LoRA has to teach; the latency gate
 (p95 ≤ 800 ms) has ample room.
 
+## LoRA training on the card (native Windows ROCm, no WSL)
+AMD's "PyTorch on Windows" release, in its own venv so `uv sync` in the repo
+can't replace the ROCm torch with the PyPI build.
+
+| Item | Value |
+|---|---|
+| ROCm | 7.2.1 Windows wheels from `repo.radeon.com/rocm/windows/rocm-rel-7.2.1` (HIP 7.2.53211) |
+| PyTorch | `torch 2.9.1+rocm7.2.1`, `torchvision 0.24.1+rocm7.2.1`, Python 3.12.10 |
+| Driver | Adrenalin 26.8.1 (AMD's page asks for 26.2.2; the newer one works) |
+| Libraries | transformers 5.21.0, peft 0.21.2, accelerate 1.15.0 |
+| Base weights | `Qwen/Qwen3-VL-4B-Instruct` safetensors, bf16, 8.89 GB, Apache-2.0 |
+
+```powershell
+py -3.12 -m venv C:\Users\Rohan\dev\rocm-train\.venv
+$py = 'C:\Users\Rohan\dev\rocm-train\.venv\Scripts\python.exe'
+$b = 'https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1'
+& $py -m pip install --no-cache-dir "$b/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl" `
+  "$b/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl" `
+  "$b/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl" "$b/rocm-7.2.1.tar.gz"
+& $py -m pip install --no-cache-dir "$b/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl" `
+  "$b/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"
+& $py -m pip install "transformers>=4.57" "peft>=0.13" "accelerate>=1.0" numpy mujoco pillow
+& $py -m pip install --no-deps -e C:\Users\Rohan\dev\Perspective
+```
+
+Run (from the repo root). **`MIOPEN_FIND_MODE=FAST` is required**: MIOpen's
+default exhaustive kernel search takes about 40 s per new input shape for the
+vision tower's Conv3d, and the cropped images change shape every example, so
+without it every step pays that. With it the same conv takes about 1 ms.
+```powershell
+$env:MIOPEN_FIND_MODE = 'FAST'
+& $py scripts\train_lora.py --data out\grounding\data.jsonl `
+  --model C:\Users\Rohan\dev\rocm-train\models\Qwen3-VL-4B-Instruct --out out\lora\<name>
+```
+
+Measured: 40 sim examples (37 train, 3 eval), 1 epoch, batch 1, grad accum 1,
+LoRA r=16 on q/k/v/o (11.8M trainable of 4.45B), bf16, gradient checkpointing.
+
+| Metric | Value |
+|---|---|
+| Model load | about 2 s |
+| First step (incl. kernel setup) | 10.3 s |
+| Step time, median / worst | **0.285 s / 0.47 s** |
+| Peak VRAM, allocated / reserved | **9.67 GB / 11.3 GB** of 20 |
+| Whole epoch + eval + save | 21.5 s |
+
+A default run (3,000 examples, 3 epochs, about 8,100 train steps) is about
+40 minutes at this rate.
+
+**4B vs 8B:** train the **4B** here. Qwen3-VL-8B's bf16 weights alone are
+about 17 GB, which leaves no room for activations on a 20 GB card; the 8B
+would need 4-bit QLoRA (bitsandbytes on ROCm/Windows, unverified) or a rented
+GPU. The 4B leaves about 9 GB free.
+
+Bug found and fixed here: `_encode` appended the answer token to `input_ids`
+and `attention_mask` but not to Qwen3-VL's `mm_token_type_ids`, so the first
+forward failed in rope indexing (mask 211 vs tensor 210). Every per-token
+tensor now grows with the answer, which is a text token. Separately, a crashed
+run can hang on exit under HIP on Windows, burning a CPU core; kill it.
+
 ## Not done yet
 - **Contention run**: whisper-server, Kokoro and the detector aren't installed
   on this machine.
 - **Word timestamps** (`anchor.parse_words` vs whisper-server's JSON): needs
   whisper-server. `WhisperCppServer.transcribe_words` still uses guessed fields.
-- **LoRA training step** (peak VRAM, step time, 4B vs 8B): needs PyTorch with
-  ROCm, which isn't installed (no torch on the host Python).
-- **8B comparison**: not run.
+- **A full training run** and scoring the adapter with `curio-sim ground-eval`:
+  llama-server needs the adapter merged and converted to GGUF (or served with
+  `--lora`), which isn't set up yet.
+- **8B comparison**: not run (see above).

@@ -172,6 +172,13 @@ def _encode(processor, row: dict, root: Path, device) -> dict:
     ans = torch.tensor([answer_ids], dtype=enc["input_ids"].dtype)
     enc["input_ids"] = torch.cat([enc["input_ids"], ans], dim=1)
     enc["attention_mask"] = torch.cat([enc["attention_mask"], torch.ones_like(ans)], dim=1)
+    # Other per-token tensors (Qwen3-VL's mm_token_type_ids: 0 text, 1 image) must
+    # grow with input_ids, or rope indexing fails; the answer is a text token.
+    for key, value in enc.items():
+        if key not in ("input_ids", "attention_mask") and value.ndim == 2 and (
+            value.shape[1] == prompt_len
+        ):
+            enc[key] = torch.cat([value, torch.zeros_like(ans, dtype=value.dtype)], dim=1)
     enc["labels"] = torch.tensor([labels], dtype=enc["input_ids"].dtype)
     return {k: v.to(device) for k, v in enc.items()}
 
