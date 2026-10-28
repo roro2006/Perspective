@@ -42,6 +42,10 @@ demo, the A/B and the booth.
 | `voice/` (VAD, streaming Whisper, Kokoro TTS with barge-in), `vlm.py`, `perception.OnnxYoloWorldDetector` | Written against local servers / ONNX; not yet run on the 7900 XT |
 | `real/bench.py`, `real/calibration.py` | Stubs (Track 2) |
 | `dashboard.py` (live three-pane UI) | Stub |
+| `conventions/` (readings, belief, noise, decide, profiles) | Working, tested |
+| `recorder` (decision log) | Working, tested |
+| `sim/users`, `sim/learn` (simulated users, learning curves) | Working, tested |
+| `runtime/` target-1 integration (T1-08) | In progress |
 
 ## Run
 
@@ -98,8 +102,10 @@ The SO-101 model is vendored from MuJoCo Menagerie
 (`curio_robot/assets/so101`, Apache-2.0, see its LICENSE).
 
 ## Next (in order)
-1. Wrist-camera refinement in the sim (fixes occlusion under calibration error; see results.md).
-2. Track 2: real webcam + phone head cam + ArUco → live object map (`real/`).
-3. Live dashboard (three panes + on/off switch) for the stage and booth.
-4. Bring up whisper-server, Kokoro and llama-server on the 7900 XT; measure the real waterfall.
-5. Real SO-101 once the go/no-go gate passes.
+1. Runtime integration of target-1 learning (T1-08, in progress).
+2. Live learning demo (T1-10).
+3. Wrist-camera refinement in the sim (fixes occlusion under calibration error; see results.md).
+4. Track 2: real webcam + phone head cam + ArUco → live object map (`real/`).
+5. Live dashboard (three panes + on/off switch) for the stage and booth.
+6. Bring up whisper-server, Kokoro and llama-server on the 7900 XT; measure the real waterfall.
+7. Real SO-101 once the go/no-go gate passes.
