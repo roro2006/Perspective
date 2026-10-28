@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 
+from curio_robot.grounding.client import DEFAULT_URL, VllmGrounder
 from curio_robot.sim import ab
+from curio_robot.sim.ground_eval import DEFAULT_MAX_P95_MS, run_ground_eval
 from curio_robot.sim.learn import learning_curve, live_learning
 from curio_robot.sim.scenarios import SCENARIOS
 from curio_robot.sim.shots import render_shot
@@ -60,6 +63,15 @@ def main(argv: list[str] | None = None) -> None:
     lr.add_argument("--live", action="store_true",
                     help="one person through the full runtime, with a transcript")
 
+    g = sub.add_parser("ground-eval", help="score a grounder on a dataset and gate it")
+    g.add_argument("--data", type=Path, required=True, help="data.jsonl from grounding_data")
+    g.add_argument("--url", default=DEFAULT_URL, help="vLLM base URL, OpenAI-compatible")
+    g.add_argument("--ids", type=Path, help="JSON file holding a list of ids to evaluate")
+    g.add_argument("--current", type=Path, help="previous result JSON to gate against")
+    g.add_argument("--max-p95-ms", type=float, default=DEFAULT_MAX_P95_MS,
+                   help="latency budget, ms")
+    g.add_argument("--out", type=Path, default=Path("out/eval/ground_eval.json"))
+
     args = parser.parse_args(argv)
     if args.cmd == "shot":
         pane = tuple(int(v) for v in args.size.split("x"))
@@ -72,6 +84,8 @@ def main(argv: list[str] | None = None) -> None:
         _live(args)
     elif args.cmd == "learn":
         _learn(args)
+    elif args.cmd == "ground-eval":
+        _ground_eval(args)
     else:
         result = ab.run(args.trials, args.seed, args.pose_noise, args.rot_noise)
         ab.save(result, args.out)
@@ -182,3 +196,25 @@ def _learn_live(args) -> None:
         r = live_learning(user, requests=args.requests, seed=seed)
         print(f"outcomes: {', '.join(r['outcomes'])}")
         print(f"p_own_frame: {' -> '.join(f'{p:.2f}' for p in r['p_own_frame'])}")
+
+
+def _ground_eval(args) -> None:
+    grounder = VllmGrounder(args.url)
+    ids = json.loads(args.ids.read_text()) if args.ids else None
+    current = json.loads(args.current.read_text()) if args.current else None
+    result, verdict = run_ground_eval(
+        args.data, grounder, ids=ids, current=current, max_p95_ms=args.max_p95_ms
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with open(args.out, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"n {result['n']}  accuracy {result['accuracy']:.3f}")
+    for kind in sorted(result["by_kind"]):
+        stats = result["by_kind"][kind]
+        print(f"  {kind}: {stats['accuracy']:.3f} (n {stats['n']})")
+    print(f"p50 {result['p50_ms']:.0f} ms  p95 {result['p95_ms']:.0f} ms")
+    if verdict is not None:
+        ok, message = verdict
+        print(f"gate {'PASS' if ok else 'FAIL'}: {message}")
+        if not ok:
+            sys.exit(1)
