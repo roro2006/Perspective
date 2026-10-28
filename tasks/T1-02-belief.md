@@ -1,7 +1,7 @@
 ---
 id: T1-02
 title: Convention belief and learning from outcomes
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/conventions/belief.py]

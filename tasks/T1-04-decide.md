@@ -1,7 +1,7 @@
 ---
 id: T1-04
 title: Act, hedge or ask
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/conventions/decide.py]

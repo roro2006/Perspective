@@ -1,7 +1,7 @@
 ---
 id: T1-06
 title: Simulated users with a frame habit
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/sim/users.py]

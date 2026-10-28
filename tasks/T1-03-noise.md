@@ -1,7 +1,7 @@
 ---
 id: T1-03
 title: Left/right flip probability under head-pose noise
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/conventions/noise.py]

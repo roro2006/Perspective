@@ -1,7 +1,7 @@
 ---
 id: T1-01
 title: Readings and frame markers
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/conventions/readings.py]

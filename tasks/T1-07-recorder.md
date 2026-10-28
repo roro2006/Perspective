@@ -1,7 +1,7 @@
 ---
 id: T1-07
 title: Versioned decision recorder
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/recorder.py]
