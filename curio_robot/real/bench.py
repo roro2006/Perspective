@@ -21,3 +21,6 @@ class RealBench:
 
     def move_gripper_to(self, position: np.ndarray) -> bool:
         raise NotImplementedError
+
+    def gripper_position(self) -> np.ndarray:
+        raise NotImplementedError

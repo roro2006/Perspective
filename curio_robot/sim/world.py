@@ -6,6 +6,7 @@ solved part, and this sim exists to test perception and perspective."""
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,7 @@ ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex")
 HOME_QPOS = np.array([1.5, -1.4, 1.4, 1.0, 0.0, 0.6])  # tucked to one side, out of the robot camera's view
 ROBOT_CAM_POS = np.array([-0.2, 0.0, 0.55])
 ROBOT_CAM_LOOK = np.array([0.3, 0.0, 0.0])
+HOVER = 0.03  # gripper height above the commanded table point
 OVERVIEW_POS = np.array([0.28, -0.75, 0.6])
 OVERVIEW_LOOK = np.array([0.26, 0.0, 0.02])
 
@@ -97,6 +99,10 @@ class SimWorld:
         self.data = mujoco.MjData(self.model)
         self.width, self.height = width, height
         self.renderer = mujoco.Renderer(self.model, height, width)
+        # capture() renders a snapshot of the state, so the live runtime's motion
+        # thread only waits for a copy, not for four renders.
+        self.lock = threading.Lock()
+        self._render_data = mujoco.MjData(self.model)
         self._block_geoms = [self.model.geom(f"block_{i}").id for i in range(N_BLOCKS)]
         self.block_colors: dict[int, str] = {}
         self._joint_ids = [self.model.joint(n).id for n in ARM_JOINTS]
@@ -152,34 +158,53 @@ class SimWorld:
     # ---- World interface ---------------------------------------------------
 
     def capture(self) -> dict[str, CameraFrame]:
-        return {name: self.render_camera(name, segmentation=True) for name in (ROBOT_CAM, HUMAN_CAM)}
+        with self.lock:
+            mujoco.mj_copyData(self._render_data, self.model, self.data)
+        return {
+            name: self.render_camera(name, segmentation=True, data=self._render_data)
+            for name in (ROBOT_CAM, HUMAN_CAM)
+        }
 
     def render_camera(
-        self, name: str, *, segmentation: bool = False, renderer: mujoco.Renderer | None = None
+        self,
+        name: str,
+        *,
+        segmentation: bool = False,
+        renderer: mujoco.Renderer | None = None,
+        data: mujoco.MjData | None = None,
     ) -> CameraFrame:
         r = renderer or self.renderer
+        d = data if data is not None else self.data
         option = mujoco.MjvOption()
         option.geomgroup[HUMAN_GROUP] = name != HUMAN_CAM
-        r.update_scene(self.data, name, scene_option=option)
+        r.update_scene(d, name, scene_option=option)
         rgb = r.render().copy()
         seg = None
         if segmentation:
             r.enable_segmentation_rendering()
-            r.update_scene(self.data, name, scene_option=option)
+            r.update_scene(d, name, scene_option=option)
             raw = r.render()
             r.disable_segmentation_rendering()
             ids = np.where(raw[..., 1] == mujoco.mjtObj.mjOBJ_GEOM, raw[..., 0], -1)
             seg = ids
         cam_id = self.model.camera(name).id
         pose = CameraPose(
-            position=self.data.cam_xpos[cam_id].copy(),
-            rotation=self.data.cam_xmat[cam_id].reshape(3, 3).copy(),
+            position=d.cam_xpos[cam_id].copy(),
+            rotation=d.cam_xmat[cam_id].reshape(3, 3).copy(),
         )
         k = intrinsics_from_fovy(self.model.cam_fovy[cam_id], r.width, r.height)
-        return CameraFrame(name, rgb, k, pose, float(self.data.time), seg)
+        return CameraFrame(name, rgb, k, pose, float(d.time), seg)
 
-    def move_gripper_to(self, position: np.ndarray, hover: float = 0.03) -> bool:
+    def gripper_position(self, hover: float = HOVER) -> np.ndarray:
+        with self.lock:
+            return self.data.site_xpos[self.model.site("gripperframe").id] - [0, 0, hover]
+
+    def move_gripper_to(self, position: np.ndarray, hover: float = HOVER) -> bool:
         """Damped least-squares IK on the gripper site (position only)."""
+        with self.lock:
+            return self._ik(position, hover)
+
+    def _ik(self, position: np.ndarray, hover: float) -> bool:
         goal = np.asarray(position, float) + [0, 0, hover]
         site = self.model.site("gripperframe").id
         dofs = [self.model.jnt_dofadr[j] for j in self._joint_ids]

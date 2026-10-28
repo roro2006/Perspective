@@ -14,3 +14,12 @@ def test_ab_smoke():
     rates = result["success_rate_pct"]
     assert set(rates) == {"perspective", "occlusion", "cluttered"}
     assert rates["occlusion"]["on"] >= rates["occlusion"]["off"]
+
+
+def test_live_runtime_picks_the_speakers_left_before_the_vlm_answers():
+    from curio_robot.sim.live import run_live
+
+    r = run_live("perspective", seed=3, vlm_latency=0.3, quiet=True)
+    assert r["success"], r
+    w = r["waterfall_ms"]
+    assert w["motion_start"] < 0 < w["vlm_reply"] < w["arrived"]

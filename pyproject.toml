@@ -12,6 +12,10 @@ dependencies = [
 [project.optional-dependencies]
 # Real cameras: ArUco calibration and live capture (Track 2).
 cameras = ["opencv-contrib-python>=4.10"]
+# Live voice (mic + speaker). STT/TTS/VLM run as local servers, see README.
+voice = ["sounddevice>=0.5"]
+# In-process detector on the GPU: DirectML reaches the RX 7900 XT on Windows.
+gpu = ["onnxruntime-directml>=1.20; sys_platform == 'win32'", "onnxruntime>=1.20; sys_platform != 'win32'"]
 
 [dependency-groups]
 dev = ["pytest>=8.0", "ruff>=0.5"]

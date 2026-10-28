@@ -70,7 +70,7 @@ def parse_target_tag(response: str) -> tuple[str, str | None]:
 
 
 def vlm_prompt(text: str, object_map: ObjectMap) -> str:
-    """TODO(C): send via clicky's OpenAI-compatible client to the lab Qwen3-VL."""
+    """The text prompt the VLM sees (sent by curio_robot.vlm.VlmResolver)."""
     lines = []
     for o in object_map.objects:
         x, y, _ = o.position

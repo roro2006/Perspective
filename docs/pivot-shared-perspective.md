@@ -155,7 +155,7 @@ is the well-solved part. The sim A/B chart also becomes a slide.
 | Robot camera | Fixed USB webcam on the robot's side of the table | Depth camera (RealSense / OAK-D) if available; not required |
 | Human camera | Phone on a head strap or chest mount, streamed over Wi-Fi (DroidCam / IP Webcam) | GoPro on a head strap |
 | Shared frame | Printed ArUco board taped to the table | — |
-| Compute | Laptop runs capture, detector, IK and voice. Lab H100/H200 runs the VLM over the existing SSH tunnel (`server/`). | Claude API through the existing worker |
+| Compute | One desktop with an AMD RX 7900 XT (20 GB) runs capture, detector, IK, voice (Whisper, Kokoro) and the VLM, all local. | Lab H100/H200 endpoint for the VLM; rule-based resolver |
 | Props | 6–8 coloured blocks or markers (identical pairs for beat 2), a box for occlusion | — |
 
 **Day 0 blocker:** who has an arm, and when. Everything else is cheap and
@@ -166,7 +166,7 @@ on hand.
 ## 4. Software architecture
 
 ```
- human cam (phone) ─┐                       ┌─ voice (Curio: Whisper, Kokoro TTS)
+ human cam (phone) ─┐                       ┌─ voice (Whisper, Kokoro TTS)
                     ├─► capture + timestamps│
  robot cam ─────────┘          │            │
                                ▼            ▼
@@ -196,15 +196,15 @@ on hand.
 
 ### Components and what we reuse
 
-| Component | Approach | Reuse from Curio |
+| Component | Approach | Where |
 |---|---|---|
-| Voice in/out | As today | `clients/whisper_transcription_client.py`, `clients/kokoro_tts_client.py`, `hotkey.py`, `mic_capture.py` |
-| VLM call | Local Qwen3-VL on the lab GPU, Claude as fallback | `clients/openai_llm_client.py`, `server/serve.sh`, `config.py` local backend |
-| Structured target output | `[TARGET:id]` tag parsed like `[POINT:x,y:label]` | `point_parser.py` pattern |
-| Memory ("where did I put the tape?") | Stretch | `memory_*` modules |
-| Dashboard | Live view: both feeds, object map, which camera saw what | `lab_server.py` pattern (stdlib HTTP server) |
+| Voice in/out | Mic + energy VAD, streaming Whisper partials (whisper.cpp server, Vulkan), Kokoro TTS with barge-in | `curio_robot/voice/` |
+| VLM call | Qwen3-VL on the 7900 XT (llama.cpp server, OpenAI-compatible API); lab GPU, then rules, as fallbacks | `curio_robot/vlm.py` |
+| Structured target output | `[TARGET:id]` tag at the end of the reply | `resolver.parse_target_tag` |
+| Memory ("where did I put the tape?") | Stretch | new |
+| Dashboard | Live view: both feeds, object map, which camera saw what | new (stdlib HTTP server) |
 | Calibration | OpenCV ArUco board → `solvePnP` per camera | new |
-| Detection | OWLv2 or Grounding DINO (open vocabulary) on the laptop GPU; YOLO-World if too slow | new |
+| Detection | YOLO-World exported to ONNX, colour prompts baked in, on the 7900 XT via ONNX Runtime DirectML | `perception.OnnxYoloWorldDetector` |
 | Lift to table | Ray from camera through the detection's base pixel, intersected with the table plane | new |
 | Perspective | Deterministic geometry: express object positions in the human head frame, then left/right/near/far is a sign check. The VLM only picks *which relation* was said. | new |
 | Reaction monitor | MediaPipe Hands on the human feed (hand enters the workspace) + keyword spotting on the transcript | new |
@@ -227,11 +227,11 @@ on hand.
 ## 5. Day-by-day (7 days, 4 people)
 
 Owners: **A** hardware/arm · **B** cameras/calibration/perception ·
-**C** voice, VLM, Curio integration · **D** data, metrics, dashboard, pitch.
+**C** voice, VLM, runtime · **D** data, metrics, dashboard, pitch.
 
 | Day | Goal (exit criterion) | A | B | C | D |
 |---|---|---|---|---|---|
-| 0 | Arm sourced; demo script frozen | Source arm/parts | Order cameras/mounts; print ArUco | Fork Curio voice loop into `robot/` | Write 3-beat demo script and A/B protocol |
+| 0 | Arm sourced; demo script frozen | Source arm/parts | Order cameras/mounts; print ArUco | Voice loop: mic, VAD, streaming STT, TTS | Write 3-beat demo script and A/B protocol |
 | 1 | Arm moves to commanded (x, y); both cameras stream | Assemble + calibrate arm | Two synced streams; ArUco pose for both | VLM endpoint up; prompt for `[TARGET:id]` | Episode logger skeleton |
 | 2 | Live object map from both views | Arm ↔ table-frame calibration (touch 4 board corners) | Detector + lift to table + fusion | Resolver on a text object map (unit tests with fake maps) | Dashboard: feeds + map |
 | 3 | Voice → pick works end to end (no perspective yet) | Scripted pick/place | Visibility flags per camera | Wire voice → resolver → arm | Latency tracer |
@@ -252,7 +252,7 @@ Never cut beat 1, the A/B numbers, or the backup video.
 | Arm parts don't arrive | Day-0 decision; borrowed arm or the laser-pointer fallback |
 | Head-camera pose jitters when the ArUco board is partly out of view | Big board, several boards around the table edge, smooth the pose over a few frames |
 | Detector misses small or identical objects | Distinct coloured props; colour in the prompt; check detection on the dashboard before each trial |
-| Lab GPU busy at demo time | Claude fallback via the existing worker; cache the prompt |
+| Local VLM slow or down at demo time | Lab GPU endpoint, then the rule-based resolver; the arm is already moving on the rule target either way |
 | Venue Wi-Fi breaks the phone stream | Phone tethered over USB; a travel router |
 | Judge asks "isn't this just multi-camera fusion?" | Two answers. The second camera is *attached to the person*, so it's aimed at what matters and moves with the task. And it gives a reference frame ("my left") and a feedback signal (reactions), which a static camera can't. |
 
