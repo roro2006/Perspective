@@ -1,7 +1,7 @@
 ---
 id: T1-10
 title: Live learning demo in the full runtime
-status: todo
+status: done
 agent: claude
 depends: [T1-08, T1-09]
 owns: [curio_robot/sim/learn.py, curio_robot/sim/cli.py, curio_robot/sim/live.py, tests/test_t1_live_learning.py]
