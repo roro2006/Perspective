@@ -1,7 +1,7 @@
 ---
 id: T1-08
 title: Wire conventions, profiles and the recorder into the live runtime
-status: todo
+status: done
 agent: claude
 depends: [T1-01, T1-02, T1-03, T1-04, T1-05, T1-07]
 owns: [curio_robot/runtime/orchestrator.py, curio_robot/runtime/__init__.py, curio_robot/sim/live.py, tests/test_t1_runtime.py]

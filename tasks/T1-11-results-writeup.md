@@ -1,7 +1,7 @@
 ---
 id: T1-11
 title: Write up target-1 results for the pitch
-status: todo
+status: done
 agent: any
 depends: [T1-09]
 owns: [product/results.md, README.md, docs/target1-conventions.md]
