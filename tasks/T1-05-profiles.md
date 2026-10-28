@@ -1,7 +1,7 @@
 ---
 id: T1-05
 title: Per-person belief profiles on disk
-status: todo
+status: done
 agent: qwen
 depends: [T1-02]
 owns: [curio_robot/conventions/profiles.py]

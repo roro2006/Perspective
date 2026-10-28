@@ -1,7 +1,7 @@
 ---
 id: T1-09
 title: Learning-curve harness (fast mode) and `curio-sim learn`
-status: todo
+status: done
 agent: any
 depends: [T1-01, T1-02, T1-03, T1-04, T1-06]
 owns: [curio_robot/sim/learn.py, curio_robot/sim/cli.py]
