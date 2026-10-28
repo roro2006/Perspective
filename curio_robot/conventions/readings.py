@@ -31,18 +31,6 @@ def frame_marker(text: str) -> Frame | None:
     Case and punctuation are ignored."""
     words = re.findall(r"[a-z]+", text.lower())
 
-    # We need to find the last occurrence of a marker.
-    # Markers:
-    # "my" -> speaker
-    # "your" -> robot
-    # "to me" -> speaker
-    # "to you" -> robot
-
-    # We iterate through words to find the last valid marker.
-    # A marker is either a single word ("my", "your") or a bigram ("to me", "to you").
-    # Since "to me" and "to you" involve two words, we need to be careful.
-    # If we see "to", we check the next word.
-
     last_marker: Frame | None = None
     i = 0
     while i < len(words):
