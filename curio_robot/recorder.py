@@ -19,7 +19,7 @@ VERSIONS: dict[str, str] = {
     "readings": "1",
     "belief": "1",
     "decide": "1",
-    "vlm_prompt": "1",
+    "vlm_prompt": "2",
 }
 
 Stage = Literal["partial", "final", "vlm", "correction"]

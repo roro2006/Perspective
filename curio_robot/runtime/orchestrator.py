@@ -43,6 +43,12 @@ from curio_robot.vlm import VlmResolver
 from curio_robot.voice import VoiceOut
 
 ACCEPT_WINDOW_S = 2.0  # an arrival nobody complains about within this long counts as accepted
+# The VLM's pick counts as this many votes against the belief's posterior; a
+# tie keeps the belief. Whose "left" is the belief's job, not the VLM's: with
+# the act threshold at 0.7, a 2x vote can't overturn a confident pick, an
+# explicit "my left" or a learned habit. Target 2 replaces this with the VLM's
+# own probabilities.
+VLM_VOTE = 2.0
 
 
 def confirmation(text: str, color: str) -> str:
@@ -263,7 +269,7 @@ class Orchestrator:
             return
         self._tracer.mark(u, "vlm_sent")
         self._vlm_pending = True
-        self._pool.submit(self._ask_vlm, u, text, object_map)
+        self._pool.submit(self._ask_vlm, u, text, object_map, self.belief.p_own_frame())
 
     def _is_answer(self, text: str) -> bool:
         """A reply naming a frame, and not a new request for another colour."""
@@ -293,8 +299,8 @@ class Orchestrator:
         self._committed = None  # already learned from; its arrival teaches nothing more
         self._say(_framed_confirmation(asked.text, asked.readings, obj.object_id), confirm=True)
 
-    def _ask_vlm(self, u: int, text: str, object_map: ObjectMap) -> None:
-        answer = self._vlm.resolve(text, object_map)
+    def _ask_vlm(self, u: int, text: str, object_map: ObjectMap, p_own_frame: float) -> None:
+        answer = self._vlm.resolve(text, object_map, p_own_frame=p_own_frame)
         self._bus.put(
             VlmReply(u, answer.object_id, answer.spoken, answer.source, time.perf_counter(),
                      {"latency_ms": round(answer.latency_ms, 1), "errors": list(answer.errors),
@@ -321,18 +327,35 @@ class Orchestrator:
             self._record("vlm", text, readings, {obj.object_id: 1.0}, vlm_decision)
         else:
             self._record("vlm", text, readings, {}, Decision("none", None, None, 0.0))
+        overruled = False
         if obj is not None and obj.object_id != self.last_target:
-            self._go(obj.object_id, obj.position, "vlm")
-            self._tracer.mark(r.utterance, "redirected")
-            self.last_target = chosen = obj.object_id
-            if self._committed is not None:
-                self._committed.chosen_id = chosen  # outcomes now judge the VLM's pick
-        if r.spoken and r.source != "unavailable":
+            if self._vlm_tips(readings, obj.object_id):
+                self._go(obj.object_id, obj.position, "vlm")
+                self._tracer.mark(r.utterance, "redirected")
+                self.last_target = chosen = obj.object_id
+                if self._committed is not None:
+                    self._committed.chosen_id = chosen  # outcomes now judge the VLM's pick
+            else:
+                overruled = True
+                self._tracer.mark(r.utterance, "vlm_overruled")
+                if self._log:
+                    self._log.event("vlm_overruled", utterance=r.utterance, vlm=obj.object_id,
+                                    kept=self.last_target)
+        if r.spoken and r.source != "unavailable" and not overruled:
             self._say(r.spoken, confirm=True)
         elif chosen:
             self._say(_framed_confirmation(text, readings, chosen), confirm=True)
         if not self.arm_active:
             self.done.set()
+
+    def _vlm_tips(self, readings: list[Reading], vlm_id: str) -> bool:
+        """Would the VLM's vote change the belief's top object to vlm_id?"""
+        posterior = self.belief.posterior(readings)
+        if vlm_id not in posterior:
+            return not readings  # nothing to weigh it against: trust the VLM
+        mine = posterior[vlm_id] * VLM_VOTE
+        best_other = max((p for k, p in posterior.items() if k != vlm_id), default=0.0)
+        return mine > best_other + 1e-9  # a tie (within float error) keeps the belief
 
     def _correct(self, text: str) -> None:
         """The human said "no ..." mid-motion. A colour means a new request;

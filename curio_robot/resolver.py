@@ -69,18 +69,43 @@ def parse_target_tag(response: str) -> tuple[str, str | None]:
     return spoken, None if m.group(1) == "none" else m.group(1)
 
 
-def vlm_prompt(text: str, object_map: ObjectMap) -> str:
-    """The text prompt the VLM sees (sent by curio_robot.vlm.VlmResolver)."""
+def _side(lat: float) -> str:
+    return "left" if lat < 0 else "right"
+
+
+def frame_habit(p_own_frame: float) -> str:
+    """One line telling the VLM what we've learned about this person's "left"."""
+    if p_own_frame >= 0.6:
+        whose = "their own left/right"
+    elif p_own_frame <= 0.4:
+        whose = "the robot's left/right"
+    else:
+        return "We don't yet know whose left/right this person means when they don't say."
+    return (
+        f"When this person says left or right without saying whose, they usually mean "
+        f"{whose} (confidence {max(p_own_frame, 1 - p_own_frame):.2f})."
+    )
+
+
+def vlm_prompt(text: str, object_map: ObjectMap, p_own_frame: float | None = None) -> str:
+    """The text prompt the VLM sees (sent by curio_robot.vlm.VlmResolver). Every
+    object is labelled from both viewpoints, so the model never has to guess
+    whose "left" the geometry meant; p_own_frame adds the learned habit."""
     lines = []
     for o in object_map.objects:
         x, y, _ = o.position
-        side = ""
+        sides = [f"robot's {_side(lateral(o, object_map.robot_pose))}"]
         if object_map.human_pose is not None:
-            side = " (speaker's left)" if lateral(o, object_map.human_pose) < 0 else " (speaker's right)"
-        lines.append(f"- {o.object_id}: {o.color} at x={x:.2f} y={y:.2f}{side}, seen by {sorted(o.seen_by)}")
+            sides.insert(0, f"speaker's {_side(lateral(o, object_map.human_pose))}")
+        lines.append(
+            f"- {o.object_id}: {o.color} at x={x:.2f} y={y:.2f} ({', '.join(sides)}), "
+            f"seen by {sorted(o.seen_by)}"
+        )
+    habit = f"{frame_habit(p_own_frame)}\n" if p_own_frame is not None else ""
     return (
         "You control a robot arm sharing a table with a person.\n"
         "Objects on the table:\n" + "\n".join(lines) + "\n"
-        f'The person said: "{text}"\n'
+        + habit
+        + f'The person said: "{text}"\n'
         "Reply with one short sentence, then [TARGET:object_id] or [TARGET:none]."
     )

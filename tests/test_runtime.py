@@ -44,8 +44,10 @@ class FakeMotion:
 class FixedVlm:
     def __init__(self, object_id):
         self.object_id = object_id
+        self.p_own_frame = None
 
-    def resolve(self, text, object_map):
+    def resolve(self, text, object_map, p_own_frame=None):
+        self.p_own_frame = p_own_frame
         return VlmAnswer(self.object_id, "", "fake", 1.0)
 
 
@@ -109,14 +111,16 @@ def test_arm_starts_before_speech_ends():
     assert tracer.has(1, "speculative_target") and not tracer.has(1, "final_transcript")
 
 
-def test_vlm_redirects_mid_motion():
-    brain, bus, motion, voice, tracer = _brain(vlm=FixedVlm("red_1"))
+def test_vlm_cannot_overrule_an_explicit_frame():
+    vlm = FixedVlm("red_1")
+    brain, bus, motion, voice, tracer = _brain(vlm=vlm)
     _say(brain, "hand me the red one on my left")
     assert motion.goals[-1][1] == "speculative"
-    brain.handle(bus.get(timeout=2))  # the VLM's reply
-    assert motion.goals[-1][1] == "vlm"
-    assert np.allclose(motion.goals[-1][0][:2], (0.25, 0.08))
-    assert tracer.has(1, "redirected")
+    n = len(motion.goals)
+    brain.handle(bus.get(timeout=2))  # the VLM's reply disagrees with "my left"
+    assert len(motion.goals) == n  # the arm keeps going to red_2
+    assert tracer.has(1, "vlm_overruled") and not tracer.has(1, "redirected")
+    assert vlm.p_own_frame is not None  # the VLM was told the learned habit
     assert voice.lines == ["Got it, the red one on your left."]
 
 

@@ -33,7 +33,9 @@ class MockVlm:
     def __init__(self, latency_s: float) -> None:
         self._latency = latency_s
 
-    def resolve(self, text: str, object_map: ObjectMap) -> VlmAnswer:
+    def resolve(
+        self, text: str, object_map: ObjectMap, p_own_frame: float | None = None
+    ) -> VlmAnswer:
         time.sleep(self._latency)
         target = resolve(text, object_map)
         return VlmAnswer(target.object_id, "", "mock", self._latency * 1000)

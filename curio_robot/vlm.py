@@ -61,8 +61,10 @@ class VlmResolver:
     def __init__(self, endpoints: list[ChatEndpoint]) -> None:
         self._endpoints = endpoints
 
-    def resolve(self, text: str, object_map: ObjectMap) -> VlmAnswer:
-        prompt = vlm_prompt(text, object_map)
+    def resolve(
+        self, text: str, object_map: ObjectMap, p_own_frame: float | None = None
+    ) -> VlmAnswer:
+        prompt = vlm_prompt(text, object_map, p_own_frame)
         known = {o.object_id for o in object_map.objects}
         errors = []
         t0 = time.perf_counter()
