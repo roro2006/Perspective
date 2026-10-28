@@ -1,7 +1,7 @@
 ---
 id: T2-11
 title: Wire the grounder into the live runtime
-status: todo
+status: done
 agent: claude
 depends: [T2-01, T2-02, T2-03, T2-04, T2-05, T2-06]
 owns: [curio_robot/runtime/orchestrator.py, curio_robot/runtime/__init__.py, curio_robot/runtime/perception_stage.py, curio_robot/voice/stt.py, curio_robot/sim/live.py, tests/test_t2_runtime.py]

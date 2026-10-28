@@ -1,7 +1,7 @@
 ---
 id: T2-12
 title: `curio-sim ground-eval`: score a grounder on a dataset and gate it
-status: todo
+status: done
 agent: any
 depends: [T2-05, T2-07, T2-08]
 owns: [curio_robot/sim/ground_eval.py, curio_robot/sim/cli.py, tests/test_t2_ground_eval.py]
