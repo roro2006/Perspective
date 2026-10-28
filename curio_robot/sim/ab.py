@@ -9,30 +9,14 @@ from pathlib import Path
 
 import numpy as np
 
+from curio_robot.geometry import perturb_pose
 from curio_robot.perception import SegmentationDetector
 from curio_robot.pipeline import step
 from curio_robot.sim.scenarios import SCENARIOS
 from curio_robot.sim.world import SimWorld
-from curio_robot.types import HUMAN_CAM, CameraPose
+from curio_robot.types import HUMAN_CAM
 
 SUCCESS_RADIUS = 0.02  # metres from the correct block: within SO-101 grasp tolerance
-
-
-def _rotation_noise(rng: np.random.Generator, sigma_deg: float) -> np.ndarray:
-    axis = rng.normal(size=3)
-    axis /= np.linalg.norm(axis)
-    angle = np.radians(rng.normal(0, sigma_deg))
-    k = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
-    return np.eye(3) + np.sin(angle) * k + (1 - np.cos(angle)) * k @ k
-
-
-def perturb_pose(pose: CameraPose, rng, pos_sigma: float, rot_sigma_deg: float) -> CameraPose:
-    """Simulates head-camera calibration error (the real bench solves the pose
-    from ArUco markers every frame, so it will never be exact)."""
-    return CameraPose(
-        position=pose.position + rng.normal(0, pos_sigma, 3),
-        rotation=_rotation_noise(rng, rot_sigma_deg) @ pose.rotation,
-    )
 
 
 def run(
