@@ -42,7 +42,7 @@ class ProfileStore:
             if "belief" not in data:
                 raise ValueError("Missing 'belief' key")
             return ConventionBelief.from_dict(data["belief"])
-        except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError) as e:
+        except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError, AttributeError) as e:
             _log.warning("Failed to load profile for %s: %s", person, e)
             return ConventionBelief()
 
