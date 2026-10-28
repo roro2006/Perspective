@@ -1,0 +1,30 @@
+[project]
+name = "curio-robot"
+version = "0.1.0"
+description = "Curio: a robot that sees what you see. Fuses a co-worker's first-person view with the robot's own cameras."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "numpy>=1.26",
+    "mujoco>=3.2",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+# Real cameras: ArUco calibration and live capture (Track 2).
+cameras = ["opencv-contrib-python>=4.10"]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+curio-sim = "curio_robot.sim.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["curio_robot"]
+
+[tool.ruff]
+line-length = 100
