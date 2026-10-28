@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from curio_robot.geometry import perturb_pose
 from curio_robot.types import CameraPose
 
 DEFAULT_POS_SIGMA = 0.01  # metres, matches the A/B's realistic calibration error
@@ -29,4 +30,20 @@ def flip_probability(
     with rng = np.random.default_rng(seed), `samples` draws. Deterministic for
     a given seed. Return 0.5 if the noise-free difference is exactly 0.
     Must run in under 20 ms for samples=400 (vectorize or keep it simple)."""
-    raise NotImplementedError("T1-03")
+    d0 = float(np.dot(a - viewer.position, viewer.right)) - float(
+        np.dot(b - viewer.position, viewer.right)
+    )
+    if d0 == 0:
+        return 0.5
+
+    rng = np.random.default_rng(seed)
+    sign0 = np.sign(d0)
+    flips = 0
+    for _ in range(samples):
+        noisy = perturb_pose(viewer, rng, pos_sigma, rot_sigma_deg)
+        d = float(np.dot(a - noisy.position, noisy.right)) - float(
+            np.dot(b - noisy.position, noisy.right)
+        )
+        if np.sign(d) != sign0:
+            flips += 1
+    return flips / samples
