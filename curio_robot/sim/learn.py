@@ -1,9 +1,14 @@
 """Learning curves for target 1: simulated users, many requests each, error
-rate against request number. Task T1-09 (fast mode); live mode after T1-08.
+rate against request number. Task T1-09 (fast mode); T1-10 (live mode, the full runtime for one person).
 
-    uv run curio-sim learn --requests 15 --users 50 [--noise] [--live]"""
+    uv run curio-sim learn --requests 15 --users 50 [--noise] [--baseline]
+    uv run curio-sim learn --live --user robot-frame --requests 6"""
 
 from __future__ import annotations
+
+import tempfile
+import time
+from pathlib import Path
 
 import numpy as np
 
@@ -12,14 +17,28 @@ from curio_robot.conventions.decide import decide
 from curio_robot.conventions.noise import flip_probability
 from curio_robot.conventions.readings import enumerate_readings
 from curio_robot.geometry import OBJECT_PLANE_Z, look_at, perturb_pose
-from curio_robot.sim.scenarios import COLORS, _in_workspace, _random_xy, _sample_human
-from curio_robot.sim.users import SimUser
-from curio_robot.sim.world import ROBOT_CAM_LOOK, ROBOT_CAM_POS
+from curio_robot.perception import SegmentationDetector
+from curio_robot.resolver import parse_request
+from curio_robot.runtime import Runtime, RuntimeConfig
+from curio_robot.sim.live import ReactiveVoice
+from curio_robot.sim.scenarios import (
+    COLORS,
+    _in_workspace,
+    _random_xy,
+    _sample_human,
+    perspective,
+)
+from curio_robot.sim.users import SimUser, Utterance
+from curio_robot.sim.world import ROBOT_CAM_LOOK, ROBOT_CAM_POS, SimWorld
 from curio_robot.types import CameraPose, ObjectMap, WorldObject
+from curio_robot.voice.scripted import PrintedVoice
 
 HALF_LEN_MIN = 0.045
 HALF_LEN_MAX = 0.07
 FLIP_SAMPLES = 100
+REACT_S = 0.3  # how long the simulated person takes to notice the arm going the wrong way
+SETTLE_S = 0.6  # quiet time after the person's last line before a request is over
+LIVE_TIMEOUT_S = 20.0  # per request; a stuck request ends rather than hangs the demo
 
 
 def _sample_pair(rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
@@ -130,3 +149,124 @@ def learning_curve(
         "ask_rate": [n / users for n in asks],
         "final_p_own_frame": float(np.mean(finals)),
     }
+
+
+class _Reactor:
+    """What the simulated person says next in live mode, from what the robot
+    has committed to and said so far. One per request."""
+
+    def __init__(self, user: SimUser, utt: Utterance) -> None:
+        self.user, self.utt = user, utt
+        self.rt: Runtime | None = None  # set once the Runtime exists
+        self.outcome = "accepted"
+        self.intended: str | None = None
+        self._seen = 0
+        self._reacted = False
+        self._first_poll: float | None = None
+
+    def react(self) -> str | None:
+        """Polled by ReactiveVoice once the request has been said."""
+        now = time.perf_counter()
+        self._first_poll = self._first_poll or now
+        if self._reacted or now - self._first_poll < REACT_S:
+            return None  # give the robot a moment to commit before judging it
+        if self.intended is None:
+            _, omap = self.rt.maps.get()
+            if omap is None:
+                return None
+            self.intended = self.user.intended(self.utt, omap)
+        lines = self.rt.voice_out.lines
+        new, self._seen = lines[self._seen:], len(lines)
+        if any("or mine?" in line for line in new):
+            self._reacted, self.outcome = True, "answered"
+            return self.user.answer(self.utt)
+        chosen = self.rt.brain.last_target
+        if chosen is not None and chosen != self.intended:
+            self._reacted, self.outcome = True, "corrected"
+            return self.user.react(self.intended, chosen)
+        return None
+
+
+def live_learning(
+    user: SimUser,
+    *,
+    requests: int = 6,
+    seed: int = 0,
+    quiet: bool = False,
+    world: SimWorld | None = None,
+    profiles_dir: Path | None = None,
+) -> dict:
+    """Live mode: one simulated person, `requests` marker-free requests through
+    the full runtime (rendering, perception, motion, voice). The person reacts
+    to the arm (sim.live.ReactiveVoice); the belief carries over between
+    requests through the person's profile, as it would across a session.
+
+    No VLM: the mock one is the rule resolver, which always takes the speaker's
+    left and would overrule what the robot has learned (feeding the VLM into
+    the posterior is target 2).
+
+    Returns {"user", "requests", "outcomes": [accepted|corrected|answered],
+    "p_own_frame": [after each request], "waterfall_ms": [per request],
+    "final_p_own_frame"}."""
+    rng = np.random.default_rng(seed)
+    world = world or SimWorld(320, 240)
+    rows = []
+    with tempfile.TemporaryDirectory() as tmp:
+        profiles = profiles_dir or Path(tmp)
+        for i in range(requests):
+            if not quiet:
+                print(f"request {i + 1}/{requests}")
+            rows.append(_live_request(user, rng, world, profiles, quiet))
+    return {
+        "user": user.name,
+        "requests": requests,
+        "outcomes": [r["outcome"] for r in rows],
+        "p_own_frame": [r["p_own_frame"] for r in rows],
+        "waterfall_ms": [r["waterfall_ms"] for r in rows],
+        "final_p_own_frame": rows[-1]["p_own_frame"] if rows else ConventionBelief().p_own_frame(),
+    }
+
+
+def _live_request(
+    user: SimUser, rng: np.random.Generator, world: SimWorld, profiles: Path, quiet: bool
+) -> dict:
+    """One request on a fresh block pair and a fresh Runtime (fresh tracker and waterfall)."""
+    world.home()
+    sc = perspective(world, rng)
+    color = parse_request(sc.request).color
+    utt = user.utter(color, str(rng.choice(["left", "right"])), rng)
+    reactor = _Reactor(user, utt)
+
+    on_say = None if quiet else (lambda text: print(f"  human: {text}"))
+    voice_in = ReactiveVoice(utt.text, reactor.react, on_say=on_say)
+    mark_tts: list = []
+    voice_out = PrintedVoice(on_start=lambda _: mark_tts and mark_tts[0](), quiet=quiet)
+    rt = Runtime(
+        world,
+        SegmentationDetector(world.block_colors),
+        voice_in=voice_in,
+        voice_out=voice_out,
+        config=RuntimeConfig(person=user.name, profiles_dir=profiles),
+    )
+    reactor.rt = rt
+    mark_tts.append(lambda: rt.tracer.mark(rt.brain.utterance, "tts_start"))
+    rt.start()
+    try:
+        end = time.perf_counter() + LIVE_TIMEOUT_S
+        while time.perf_counter() < end:
+            rt.run(0.1)
+            brain = rt.brain
+            if voice_in.idle_for(SETTLE_S) and brain.done.is_set() and not brain.arm_active:
+                break
+        rt.run(0.2)  # let the last events land
+    finally:
+        rt.close()  # an arrival nobody objected to is learned as accepted here
+    p_own = rt.brain.belief.p_own_frame()
+    waterfall = rt.tracer.waterfall(1)
+    if not quiet:
+        b = rt.brain.belief
+        print(f"  -> {reactor.outcome}; belief p_own_frame={p_own:.2f} "
+              f"(a={b.own_frame_a:.2f}, b={b.own_frame_b:.2f})")
+        stages = ", ".join(f"{k} {v:.0f}" for k, v in waterfall.items())
+        print(f"  waterfall ms from speech end: {stages}")
+    return {"outcome": reactor.outcome, "p_own_frame": p_own, "waterfall_ms": waterfall}

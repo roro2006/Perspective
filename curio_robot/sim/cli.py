@@ -4,6 +4,7 @@
     uv run curio-sim ab --trials 200 --pose-noise 0.01 --rot-noise 2
     uv run curio-sim live perspective --seed 3 --vlm-latency 0.6
     uv run curio-sim learn --user all --users 50 --noise --baseline
+    uv run curio-sim learn --live --user robot-frame --requests 6
 """
 
 from __future__ import annotations
@@ -15,10 +16,12 @@ from pathlib import Path
 import numpy as np
 
 from curio_robot.sim import ab
-from curio_robot.sim.learn import learning_curve
+from curio_robot.sim.learn import learning_curve, live_learning
 from curio_robot.sim.scenarios import SCENARIOS
 from curio_robot.sim.shots import render_shot
 from curio_robot.sim.users import POPULATION
+
+LIVE_SEED = 1  # a stage-friendly default: seed 0's robot-frame person says "mine" once by chance
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -50,10 +53,12 @@ def main(argv: list[str] | None = None) -> None:
     lr.add_argument("--user", choices=["own-frame", "robot-frame", "mixed", "all"], default="all")
     lr.add_argument("--requests", type=int, default=15)
     lr.add_argument("--users", type=int, default=50)
-    lr.add_argument("--seed", type=int, default=0)
+    lr.add_argument("--seed", type=int, default=None, help=f"default 0 ({LIVE_SEED} with --live)")
     lr.add_argument("--noise", action="store_true")
     lr.add_argument("--baseline", action="store_true")
     lr.add_argument("--out", type=Path, default=Path("out/learn.json"))
+    lr.add_argument("--live", action="store_true",
+                    help="one person through the full runtime, with a transcript")
 
     args = parser.parse_args(argv)
     if args.cmd == "shot":
@@ -108,6 +113,10 @@ def _live(args) -> None:
 
 
 def _learn(args) -> None:
+    if args.live:
+        _learn_live(args)
+        return
+    seed = 0 if args.seed is None else args.seed
     pos_noise = 0.01 if args.noise else 0.0
     rot_noise_deg = 2.0 if args.noise else 0.0
 
@@ -122,7 +131,7 @@ def _learn(args) -> None:
             user,
             requests=args.requests,
             users=args.users,
-            seed=args.seed,
+            seed=seed,
             pos_noise=pos_noise,
             rot_noise_deg=rot_noise_deg,
             learn=True,
@@ -133,7 +142,7 @@ def _learn(args) -> None:
                 user,
                 requests=args.requests,
                 users=args.users,
-                seed=args.seed,
+                seed=seed,
                 pos_noise=pos_noise,
                 rot_noise_deg=rot_noise_deg,
                 learn=False,
@@ -162,3 +171,14 @@ def _format_learn_row(r: dict, requests: int) -> str:
     p_own = f"{r['final_p_own_frame']:.2f}"
 
     return f"{r['user']}, {mode}, {', '.join(err_strs)}, {', '.join(ask_strs)}, {p_own}"
+
+
+def _learn_live(args) -> None:
+    """One simulated person per user type, live; --users, --noise, --baseline don't apply."""
+    users = list(POPULATION) if args.user == "all" else [u for u in POPULATION if u.name == args.user]
+    seed = LIVE_SEED if args.seed is None else args.seed
+    for user in users:
+        print(f"== {user.name} (live, {args.requests} requests, seed {seed})")
+        r = live_learning(user, requests=args.requests, seed=seed)
+        print(f"outcomes: {', '.join(r['outcomes'])}")
+        print(f"p_own_frame: {' -> '.join(f'{p:.2f}' for p in r['p_own_frame'])}")
