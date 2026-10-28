@@ -46,6 +46,8 @@ demo, the A/B and the booth.
 | `recorder` (decision log) | Working, tested |
 | `sim/users`, `sim/learn` (simulated users, learning curves) | Working, tested |
 | `runtime/` target-1 integration (belief, profiles, recorder) | Working, tested |
+| VLM vs belief | The text VLM gets both frames and the learned habit, and counts as a 2x vote, so it can't overturn an explicit or learned frame |
+| `grounding/`, `sim/grounding_data` (target 2: VLM on the human-view frame) | Contracts and acceptance tests; cards T2-01..12 open |
 
 ## Run
 
@@ -102,9 +104,9 @@ The SO-101 model is vendored from MuJoCo Menagerie
 (`curio_robot/assets/so101`, Apache-2.0, see its LICENSE).
 
 ## Next (in order)
-1. Live learning demo (T1-10).
-2. Wrist-camera refinement in the sim (fixes occlusion under calibration error; see results.md).
-3. Track 2: real webcam + phone head cam + ArUco → live object map (`real/`).
-4. Live dashboard (three panes + on/off switch) for the stage and booth.
-5. Bring up whisper-server, Kokoro and llama-server on the 7900 XT; measure the real waterfall.
-6. Real SO-101 once the go/no-go gate passes.
+1. Bring up the 7900 XT: vLLM in WSL2, Whisper, Kokoro; measure the real waterfall (T2-10).
+2. Track 2: real webcam + phone head cam + ArUco → live object map (`real/`); measure map and "my left" accuracy.
+3. Target 2 wave 1 (T2-01..06, 08) with Qwen agents, then the sim dataset, training and integration.
+4. Live dashboard (three panes, on/off switch, live belief) for the stage and booth.
+5. Episode recorder with frames and head pose; a small pilot with real people.
+6. Wrist-camera refinement in the sim; real SO-101 once the go/no-go gate passes.

@@ -23,6 +23,20 @@ uv run python scripts/tasks.py pack T1-01    # one-file context for an agent
 
 Wave 1 is six independent modules with frozen contracts and acceptance tests,
 each one file. That's the bulk of the work and the right size for a local model.
+Target 1 is done.
+
+## Target 2 waves
+Design: [`docs/target2-grounding.md`](../docs/target2-grounding.md).
+
+| Wave | Cards (parallel within a wave) | Agent |
+|---|---|---|
+| 0 | T2-00 contracts, tests, board | done |
+| 1 | T2-01 frame history · T2-02 anchor · T2-03 marks · T2-04 prompt · T2-05 client · T2-06 fuse · T2-08 evaluate | Qwen ×7 (or any) |
+| 2 | T2-07 sim dataset (needs 03, 04) · T2-10 bring-up on the 7900 XT (needs 05; at the machine) | any · Claude + you |
+| 3 | T2-09 LoRA training (needs 07) · T2-11 runtime integration (needs 01–06) · T2-12 eval runner (needs 05, 07, 08) | Claude · Claude · any |
+
+T2-10 and the real training run happen on the 7900 XT; while Qwen agents use
+that GPU, nothing else can, so schedule bring-up and agent waves apart.
 
 ## Card lifecycle
 `todo` → `doing` → `review` → `done` (or `blocked`, with a reason in the notes).

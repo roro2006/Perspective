@@ -20,6 +20,7 @@ class Heard:
     kind: Literal["start", "partial", "end", "final"]
     text: str
     t: float  # when the audio happened (perf_counter), not when the transcript arrived
+    words: tuple = ()  # grounding.anchor.Word timings when the STT provides them (target 2)
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,4 +48,17 @@ class VlmReply:
     detail: dict = field(default_factory=dict)
 
 
-Event = Heard | Interrupt | ArmEvent | VlmReply
+
+@dataclass(frozen=True, slots=True)
+class GroundingReply:
+    """Target 2: the grounder's probabilities for one utterance (T2-11 emits it)."""
+
+    utterance: int
+    probs: dict[str, float]  # object_id -> probability; {} when unavailable
+    letter: str | None
+    source: str
+    latency_ms: float
+    t: float
+
+
+Event = Heard | Interrupt | ArmEvent | VlmReply | GroundingReply
