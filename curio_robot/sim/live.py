@@ -9,6 +9,7 @@ latency waterfall, with no hardware and no GPU.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -46,6 +47,9 @@ def run_live(
     timeout: float = 15.0,
     quiet: bool = False,
     world: SimWorld | None = None,
+    person: str = "anonymous",
+    profiles_dir: Path | None = None,
+    decisions_path: Path | None = None,
 ) -> dict:
     world = world or SimWorld(320, 240)
     world.home()
@@ -62,7 +66,8 @@ def run_live(
         voice_in=ScriptedVoice([(say_after, sc.request)]),
         voice_out=voice_out,
         vlm=vlm,
-        config=RuntimeConfig(use_human_view=use_human_view),
+        config=RuntimeConfig(use_human_view=use_human_view, person=person,
+                             profiles_dir=profiles_dir, decisions_path=decisions_path),
     )
     mark_tts.append(lambda: rt.tracer.mark(rt.brain.utterance, "tts_start"))
     if not quiet:

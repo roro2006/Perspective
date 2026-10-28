@@ -18,10 +18,13 @@ import queue
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
+from curio_robot.conventions.profiles import ProfileStore
 from curio_robot.episode_log import EpisodeLog
 from curio_robot.events import Event
 from curio_robot.perception import Detector
+from curio_robot.recorder import DecisionRecorder
 from curio_robot.runtime.motion import Motion
 from curio_robot.runtime.orchestrator import Orchestrator
 from curio_robot.runtime.perception_stage import PerceptionStage
@@ -39,6 +42,9 @@ class RuntimeConfig:
     capture_hz: float = 15.0
     use_human_view: bool = True  # the Curio on/off switch
     arm_speed: float = 0.25  # m/s
+    person: str = "anonymous"  # whose conventions to load, learn and save
+    profiles_dir: Path | None = None  # None: the belief lives in memory only
+    decisions_path: Path | None = None  # None: decisions aren't recorded
 
 
 class Runtime:
@@ -68,8 +74,13 @@ class Runtime:
             use_human_view=lambda: self.config.use_human_view,
             hand_in_workspace=hand_in_workspace, emit=self.bus.put,
         )
+        cfg = self.config
+        self.recorder = DecisionRecorder(cfg.decisions_path) if cfg.decisions_path else None
         self.brain = Orchestrator(
-            self.bus, self.maps, self.motion, self.voice_out, self.tracer, vlm=vlm, log=log
+            self.bus, self.maps, self.motion, self.voice_out, self.tracer, vlm=vlm, log=log,
+            person=cfg.person,
+            profiles=ProfileStore(cfg.profiles_dir) if cfg.profiles_dir else None,
+            recorder=self.recorder,
         )
 
     def start(self) -> None:
@@ -100,3 +111,5 @@ class Runtime:
         self.perception.close()
         self.motion.close()
         self.voice_out.close()
+        if self.recorder:
+            self.recorder.close()
