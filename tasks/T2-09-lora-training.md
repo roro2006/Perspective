@@ -1,7 +1,7 @@
 ---
 id: T2-09
 title: LoRA training script (runs on the 7900 XT in WSL2)
-status: todo
+status: done
 agent: claude
 depends: [T2-07]
 owns: [scripts/train_lora.py, tests/test_t2_train.py, pyproject.toml]
