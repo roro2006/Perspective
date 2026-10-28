@@ -1,7 +1,7 @@
 ---
 id: T2-07
 title: Sim grounding dataset generator
-status: todo
+status: done
 agent: any
 depends: [T2-03, T2-04]
 owns: [curio_robot/sim/grounding_data.py]
