@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from curio_robot import perspective
 from curio_robot.conventions.readings import Frame
 from curio_robot.types import ObjectMap
 
@@ -32,23 +33,43 @@ class SimUser:
         where m is "my" (speaker) or "your" (robot); otherwise
         f"Hand me the {color} one on the {side}". Draw the frame first, then
         the marker, each with one rng.random() call, in that order."""
-        raise NotImplementedError("T1-06")
+        frame = "speaker" if rng.random() < self.p_own_frame else "robot"
+        marked = rng.random() < self.p_marker
+        if marked:
+            m = "my" if frame == "speaker" else "your"
+            text = f"Hand me the {color} one on {m} {side}"
+        else:
+            text = f"Hand me the {color} one on the {side}"
+        return Utterance(text, frame, color, side)
 
     def intended(self, utt: Utterance, object_map: ObjectMap) -> str:
         """The object this person meant: among objects of utt.color, pick
         utt.side from their frame's viewer (perspective.pick; speaker ->
         human_pose, robot -> robot_pose). ValueError if no such objects or
         the speaker frame is asked for with no human_pose."""
-        raise NotImplementedError("T1-06")
+        if utt.frame == "speaker":
+            if object_map.human_pose is None:
+                raise ValueError("speaker frame requested but human_pose is None")
+            viewer = object_map.human_pose
+        else:
+            viewer = object_map.robot_pose
+
+        candidates = object_map.by_color(utt.color)
+        if not candidates:
+            raise ValueError(f"no objects of color {utt.color}")
+
+        return perspective.pick(candidates, utt.side, viewer).object_id
 
     def answer(self, utt: Utterance) -> str:
         """Reply to "your left or mine?": "mine" (speaker frame) or "yours"."""
-        raise NotImplementedError("T1-06")
+        return "mine" if utt.frame == "speaker" else "yours"
 
     def react(self, intended_id: str, chosen_id: str | None) -> str | None:
         """None if chosen_id == intended_id (they accept), else
         "no, the other one"."""
-        raise NotImplementedError("T1-06")
+        if chosen_id == intended_id:
+            return None
+        return "no, the other one"
 
 
 POPULATION = (
