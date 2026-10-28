@@ -1,7 +1,7 @@
 ---
 id: T2-01
 title: Frame history ring buffer
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/grounding/history.py]

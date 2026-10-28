@@ -1,7 +1,7 @@
 ---
 id: T2-04
 title: Grounding request builder
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/grounding/prompt.py]

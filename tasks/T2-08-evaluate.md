@@ -1,7 +1,7 @@
 ---
 id: T2-08
 title: Evaluation and the replacement gate
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/grounding/evaluate.py]

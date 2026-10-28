@@ -1,7 +1,7 @@
 ---
 id: T2-06
 title: Fuse VLM probabilities with the belief
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/grounding/fuse.py]

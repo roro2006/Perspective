@@ -1,7 +1,7 @@
 ---
 id: T2-05
 title: vLLM grounding client with letter probabilities
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/grounding/client.py]

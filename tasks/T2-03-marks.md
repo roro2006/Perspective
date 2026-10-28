@@ -1,7 +1,7 @@
 ---
 id: T2-03
 title: Set-of-marks placement and rendering
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/grounding/marks.py]

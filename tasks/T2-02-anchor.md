@@ -1,7 +1,7 @@
 ---
 id: T2-02
 title: Word timings and the anchor moment
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/grounding/anchor.py]
