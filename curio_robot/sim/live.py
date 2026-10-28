@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from curio_robot.events import Heard
+from curio_robot.grounding.client import VllmGrounder
 from curio_robot.perception import SegmentationDetector
 from curio_robot.resolver import resolve
 from curio_robot.runtime import Runtime, RuntimeConfig
@@ -123,6 +124,7 @@ def run_live(
     person: str = "anonymous",
     profiles_dir: Path | None = None,
     decisions_path: Path | None = None,
+    grounder_url: str | None = None,
 ) -> dict:
     world = world or SimWorld(320, 240)
     world.home()
@@ -140,7 +142,8 @@ def run_live(
         voice_out=voice_out,
         vlm=vlm,
         config=RuntimeConfig(use_human_view=use_human_view, person=person,
-                             profiles_dir=profiles_dir, decisions_path=decisions_path),
+                             profiles_dir=profiles_dir, decisions_path=decisions_path,
+                             grounder=VllmGrounder(grounder_url) if grounder_url else None),
     )
     mark_tts.append(lambda: rt.tracer.mark(rt.brain.utterance, "tts_start"))
     if not quiet:

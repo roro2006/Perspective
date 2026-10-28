@@ -10,6 +10,8 @@ the arm and the voice do. This is where the pipelining happens:
   VlmReply            -> confirm (keep going) or redirect mid-motion, and speak
   Interrupt / "no"    -> stop the arm, stop talking, learn from the correction
   ArmEvent            -> waterfall marks, "can't reach that", accept window
+  GroundingReply      -> target 2: the grounder's view of the frame at the key word,
+                         fused with the belief; it may redirect or settle "that one"
 
 Every decision goes to the DecisionRecorder and every outcome (accepted,
 corrected, answered) updates the person's ConventionBelief (docs/target1-conventions.md)."""
@@ -22,6 +24,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Protocol
 
 import numpy as np
 
@@ -31,14 +34,20 @@ from curio_robot.conventions.noise import flip_probability
 from curio_robot.conventions.profiles import ProfileStore
 from curio_robot.conventions.readings import Frame, Reading, enumerate_readings
 from curio_robot.episode_log import EpisodeLog
-from curio_robot.events import ArmEvent, Event, Heard, Interrupt, VlmReply
+from curio_robot.events import ArmEvent, Event, GroundingReply, Heard, Interrupt, VlmReply
+from curio_robot.grounding.anchor import anchor_time
+from curio_robot.grounding.client import GroundingAnswer
+from curio_robot.grounding.fuse import fuse
+from curio_robot.grounding.history import FrameHistory
+from curio_robot.grounding.marks import place_marks, render_marks
+from curio_robot.grounding.prompt import GroundingRequest, build_request
 from curio_robot.monitor import check_speech
 from curio_robot.recorder import DecisionRecord, DecisionRecorder, Stage
 from curio_robot.resolver import parse_request
 from curio_robot.runtime.motion import Motion
 from curio_robot.runtime.slot import Latest
 from curio_robot.runtime.trace import Tracer
-from curio_robot.types import ObjectMap
+from curio_robot.types import CameraFrame, ObjectMap
 from curio_robot.vlm import VlmResolver
 from curio_robot.voice import VoiceOut
 
@@ -94,6 +103,12 @@ class _Pending:
     chosen_id: str | None
 
 
+class Grounder(Protocol):
+    """What the orchestrator needs from grounding.client.VllmGrounder (fakes in tests)."""
+
+    def score(self, request: GroundingRequest) -> GroundingAnswer: ...
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -109,6 +124,8 @@ class Orchestrator:
         profiles: ProfileStore | None = None,
         recorder: DecisionRecorder | None = None,
         belief: ConventionBelief | None = None,
+        grounder: Grounder | None = None,
+        history: FrameHistory | None = None,
     ) -> None:
         self._bus, self._maps, self._motion, self._voice = bus, maps, motion, voice_out
         self._tracer, self._vlm, self._log = tracer, vlm, log
@@ -135,6 +152,11 @@ class Orchestrator:
         self._asked: _Pending | None = None  # waiting for "yours" / "mine"
         self._accept: tuple[_Pending, float] | None = None  # arrived; deadline for "accepted"
         self._accept_closing = False  # the next utterance started: accept unless it's a "no"
+        # Target 2: with a grounder, the final is grounded in the frame at the key word.
+        self._grounder, self._history = grounder, history
+        self._words: tuple = ()  # word timings of the last final transcript
+        self._speech_end = 0.0  # its speech-end time, the anchor when there are no words
+        self._ground_job: _Pending | None = None  # the decision a GroundingReply judges
         self._running = False
         self._thread = threading.Thread(target=self._loop, name="orchestrator", daemon=True)
 
@@ -172,6 +194,8 @@ class Orchestrator:
             self._on_vlm(event)
         elif isinstance(event, ArmEvent):
             self._on_arm(event)
+        elif isinstance(event, GroundingReply):
+            self._on_grounding(event)
 
     def _on_heard(self, e: Heard) -> None:
         if e.kind == "start":
@@ -198,6 +222,7 @@ class Orchestrator:
                 self._speculate(e.text)
             return
         self._tracer.mark(u, "final_transcript")
+        self._words, self._speech_end = e.words, e.t
         if self._log:
             self._log.event("utterance", utterance=u, text=e.text)
         if not e.text.strip():
@@ -247,10 +272,14 @@ class Orchestrator:
         if decision.kind == "none":
             self._halt()
             req = parse_request(text)
+            if not readings and req.color is None and self._ground(u, text, [], None, object_map):
+                return  # "that one": the rules found nothing, the grounder may settle it
             self._say(f"I don't see a {req.color} one." if req.color else "Which one do you mean?")
             self.done.set()
             return
         if decision.kind in ("hedge", "ask"):
+            if self._ground(u, text, readings, None, object_map):
+                return  # "that one" / an unsure frame: let the grounder look before asking
             self._halt()
             self._asked = _Pending(u, text, readings, None)
             self._say(decision.question or _question(text))
@@ -264,6 +293,8 @@ class Orchestrator:
         if self._log:
             self._log.event("target", utterance=u, source="belief", object_id=object_id,
                             reason=f"{decision.kind} p={decision.confidence:.2f}")
+        if self._ground(u, text, readings, object_id, object_map):
+            return
         if self._vlm is None:
             self._say(_framed_confirmation(text, readings, object_id), confirm=True)
             return
@@ -348,6 +379,90 @@ class Orchestrator:
         if not self.arm_active:
             self.done.set()
 
+    def _ground(
+        self,
+        u: int,
+        text: str,
+        readings: list[Reading],
+        chosen_id: str | None,
+        object_map: ObjectMap,
+    ) -> bool:
+        """Send the frame the person saw at the key word to the grounder, off this
+        thread. False (nothing sent) without a grounder or without a frame."""
+        if self._grounder is None or self._history is None:
+            return False
+        anchor = anchor_time(list(self._words))
+        frame = self._history.at(self._speech_end if anchor is None else anchor)
+        frame = frame or self._history.latest()
+        if frame is None:
+            return False
+        self._ground_job = _Pending(u, text, readings, chosen_id)
+        self._tracer.mark(u, "ground_sent")
+        self._pool.submit(self._ask_grounder, u, text, object_map, frame,
+                          self.belief.p_own_frame())
+        return True
+
+    def _ask_grounder(
+        self, u: int, text: str, object_map: ObjectMap, frame: CameraFrame, p_own_frame: float
+    ) -> None:
+        """Marks, render, request, score; always posts a reply so the utterance finishes."""
+        try:
+            marks = place_marks(object_map, frame)
+            image, _ = render_marks(frame, marks)
+            request = build_request(text, object_map, marks, image, p_own_frame=p_own_frame)
+            answer = self._grounder.score(request)
+            reply = GroundingReply(u, dict(answer.probs), answer.letter, answer.source,
+                                   answer.latency_ms, time.perf_counter())
+        except Exception as e:  # noqa: BLE001 - a broken request degrades to "unavailable"
+            reply = GroundingReply(u, {}, None, f"error: {e}", 0.0, time.perf_counter())
+        self._bus.put(reply)
+
+    def _on_grounding(self, r: GroundingReply) -> None:
+        """Fuse the grounder's probabilities with the belief, then decide: it may
+        redirect a committed pick, or act alone when the rules found nothing."""
+        job = self._ground_job
+        if job is None or job.utterance != r.utterance or r.utterance != self.utterance:
+            return  # the human has moved on
+        self._ground_job = None
+        if self._interrupted:
+            return
+        self._tracer.mark(r.utterance, "ground_reply", r.t)
+        if self._log:
+            self._log.event("grounding", utterance=r.utterance, source=r.source,
+                            letter=r.letter, latency_ms=round(r.latency_ms, 1),
+                            probs={k: round(p, 3) for k, p in r.probs.items()})
+        _, object_map = self._maps.get()
+        fused = fuse(self.belief.posterior(job.readings), r.probs)
+        decision = Decision("none", None, None, 0.0)
+        if object_map is not None:
+            decision = decide(fused, object_map, job.text)
+        self._record("vlm", job.text, job.readings, fused, decision)
+        if job.chosen_id is None:  # the belief couldn't act: the fused posterior decides
+            if decision.kind != "act":
+                self._halt()
+                if job.readings:
+                    self._asked = _Pending(r.utterance, job.text, job.readings, None)
+                self._say(_question(job.text))
+                self.done.set()
+                return
+            self._go(decision.object_id, decision.position, "vlm")
+            self.last_target = decision.object_id
+            self._committed = _Pending(r.utterance, job.text, job.readings, decision.object_id)
+        elif decision.kind == "act" and decision.object_id != self.last_target:
+            self._go(decision.object_id, decision.position, "vlm")
+            self._tracer.mark(r.utterance, "ground_redirected")
+            self.last_target = decision.object_id
+            if self._committed is not None and self._committed.utterance == r.utterance:
+                self._committed.chosen_id = decision.object_id  # outcomes judge the arm's pick
+        if self._log:
+            self._log.event("target", utterance=r.utterance, source="grounder",
+                            object_id=self.last_target, reason=f"fused {decision.kind}")
+        if self.last_target:
+            self._say(_framed_confirmation(job.text, job.readings, self.last_target),
+                      confirm=True)
+        if not self.arm_active:
+            self.done.set()
+
     def _vlm_tips(self, readings: list[Reading], vlm_id: str) -> bool:
         """Would the VLM's vote change the belief's top object to vlm_id?"""
         posterior = self.belief.posterior(readings)
@@ -424,7 +539,7 @@ class Orchestrator:
             if committed is not None and committed.chosen_id == self.goal_id:
                 self._accept = (committed, time.perf_counter() + ACCEPT_WINDOW_S)
                 self._accept_closing = False
-            if not self._vlm_pending:
+            if not self._vlm_pending and self._ground_job is None:
                 self.done.set()
         elif e.kind == "unreachable":
             self._say("I can't reach that one.")

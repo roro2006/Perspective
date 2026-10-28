@@ -6,6 +6,7 @@ concurrent stages, so nothing slow sits in front of the arm.
   voice-in      VAD + streaming STT ──► Heard events
   orchestrator  events ──► Motion.go/stop, VoiceOut.say, VLM jobs
   vlm pool      VlmResolver on a map snapshot ──► VlmReply event
+                (target 2) grounder on the frame at the key word ──► GroundingReply
   motion        small IK steps toward the current goal ──► ArmEvent
   voice-out     TTS queue with barge-in
 
@@ -23,6 +24,8 @@ from pathlib import Path
 from curio_robot.conventions.profiles import ProfileStore
 from curio_robot.episode_log import EpisodeLog
 from curio_robot.events import Event
+from curio_robot.grounding.client import VllmGrounder
+from curio_robot.grounding.history import FrameHistory
 from curio_robot.perception import Detector
 from curio_robot.recorder import DecisionRecorder
 from curio_robot.runtime.motion import Motion
@@ -45,6 +48,7 @@ class RuntimeConfig:
     person: str = "anonymous"  # whose conventions to load, learn and save
     profiles_dir: Path | None = None  # None: the belief lives in memory only
     decisions_path: Path | None = None  # None: decisions aren't recorded
+    grounder: VllmGrounder | None = None  # target 2; None: the text VLM path only
 
 
 class Runtime:
@@ -69,18 +73,19 @@ class Runtime:
         self.voice_in = voice_in
         self.voice_out = voice_out or PrintedVoice()
         self.motion = Motion(world, self.bus.put, speed=self.config.arm_speed)
+        cfg = self.config
+        self.history = FrameHistory() if cfg.grounder is not None else None
         self.perception = PerceptionStage(
             self.frames, self.maps, detector, self.tracer,
             use_human_view=lambda: self.config.use_human_view,
-            hand_in_workspace=hand_in_workspace, emit=self.bus.put,
+            hand_in_workspace=hand_in_workspace, emit=self.bus.put, history=self.history,
         )
-        cfg = self.config
         self.recorder = DecisionRecorder(cfg.decisions_path) if cfg.decisions_path else None
         self.brain = Orchestrator(
             self.bus, self.maps, self.motion, self.voice_out, self.tracer, vlm=vlm, log=log,
             person=cfg.person,
             profiles=ProfileStore(cfg.profiles_dir) if cfg.profiles_dir else None,
-            recorder=self.recorder,
+            recorder=self.recorder, grounder=cfg.grounder, history=self.history,
         )
 
     def start(self) -> None:
@@ -93,7 +98,9 @@ class Runtime:
     def tick(self) -> None:
         """Capture once. Call from the thread that created the world."""
         t0 = time.perf_counter()
-        self.frames.put(self.world.capture())
+        frames = self.world.capture()
+        self.perception.remember(frames, t0)
+        self.frames.put(frames)
         self.tracer.frame("capture", (time.perf_counter() - t0) * 1000)
 
     def run(self, seconds: float, until: Callable[[], bool] | None = None) -> None:

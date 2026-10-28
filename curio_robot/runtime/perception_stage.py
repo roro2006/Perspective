@@ -12,6 +12,7 @@ import numpy as np
 
 from curio_robot.events import Interrupt
 from curio_robot.fusion import Tracker, build_object_map
+from curio_robot.grounding.history import FrameHistory
 from curio_robot.perception import Detector
 from curio_robot.runtime.slot import Latest
 from curio_robot.runtime.trace import Tracer
@@ -60,11 +61,13 @@ class PerceptionStage:
         use_human_view: Callable[[], bool],
         hand_in_workspace: Callable[[CameraFrame], bool] | None = None,
         emit: Callable[[Interrupt], None] | None = None,
+        history: FrameHistory | None = None,
     ) -> None:
         self._frames, self._maps, self._detector, self._tracer = frames, maps, detector, tracer
         self._use_human_view = use_human_view
         self._hand = hand_in_workspace
         self._emit = emit
+        self._history = history
         self._gate = FrameGate()
         self._tracker = Tracker()
         self._last: dict[str, list[Detection]] = {}
@@ -79,6 +82,12 @@ class PerceptionStage:
     def close(self) -> None:
         self._running = False
         self._thread.join(timeout=2)
+
+    def remember(self, frames: dict[str, CameraFrame], t: float) -> None:
+        """Keep every human-camera frame (even ones detection skips) with its capture
+        time t (perf_counter), so the grounder can look back to the key word."""
+        if self._history is not None and HUMAN_CAM in frames:
+            self._history.push(frames[HUMAN_CAM], t)
 
     def _loop(self) -> None:
         seen = 0

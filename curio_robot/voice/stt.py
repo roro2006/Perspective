@@ -20,6 +20,7 @@ from typing import Protocol
 import numpy as np
 
 from curio_robot.events import Heard
+from curio_robot.grounding.anchor import parse_words
 from curio_robot.voice.audio import BLOCK, SAMPLE_RATE, EnergyVAD
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,15 @@ PRE_ROLL_S = 0.3  # audio kept from before the VAD fired, so the first word isn'
 
 class Transcriber(Protocol):
     def transcribe(self, pcm: np.ndarray, sample_rate: int) -> str: ...
+
+
+class WordTranscriber(Transcriber, Protocol):
+    """Optional: a transcriber that can also give word timings (target 2). The
+    recognizer uses it for the final when present; plain Transcribers still work."""
+
+    def transcribe_words(self, pcm: np.ndarray, sample_rate: int) -> dict:
+        """An OpenAI-style verbose_json dict: "text" plus "words" or "segments"."""
+        ...
 
 
 def wav_bytes(pcm: np.ndarray, sample_rate: int) -> bytes:
@@ -50,8 +60,16 @@ class WhisperCppServer:
         self._timeout = timeout_s
 
     def transcribe(self, pcm: np.ndarray, sample_rate: int) -> str:
+        return self._post(pcm, sample_rate, {"response_format": "json"})["text"].strip()
+
+    def transcribe_words(self, pcm: np.ndarray, sample_rate: int) -> dict:
+        """verbose_json with word timestamps; the exact server fields are confirmed in T2-10."""
+        fields = {"response_format": "verbose_json", "timestamp_granularities[]": "word"}
+        return self._post(pcm, sample_rate, fields)
+
+    def _post(self, pcm: np.ndarray, sample_rate: int, extra: dict[str, str]) -> dict:
         boundary = uuid.uuid4().hex
-        fields = {"response_format": "json", "temperature": "0"}
+        fields = {**extra, "temperature": "0"}
         parts = [
             f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
             for k, v in fields.items()
@@ -68,7 +86,7 @@ class WhisperCppServer:
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         )
         with urllib.request.urlopen(req, timeout=self._timeout) as resp:
-            return json.load(resp)["text"].strip()
+            return json.load(resp)
 
 
 class StreamingRecognizer:
@@ -104,7 +122,9 @@ class StreamingRecognizer:
 
     def _loop(self, emit: Callable[[Heard], None]) -> None:
         pre_roll: deque[np.ndarray] = deque(maxlen=max(1, round(PRE_ROLL_S * SAMPLE_RATE / BLOCK)))
+        pre_times: deque[float] = deque(maxlen=pre_roll.maxlen)
         speech: list[np.ndarray] = []
+        speech_t0 = 0.0  # runtime time of the buffer's first block: the word-timing offset
         last_partial = 0.0
         for block, t in self._source:
             if not self._running:
@@ -114,14 +134,17 @@ class StreamingRecognizer:
                 speech.append(block)
             else:
                 pre_roll.append(block)
+                pre_times.append(t)
             if event and event.kind == "start":
+                speech_t0 = pre_times[0] if pre_times else t
                 speech = [*pre_roll, *speech]
                 pre_roll.clear()
+                pre_times.clear()
                 last_partial = t
                 emit(Heard("start", "", event.t))
             elif event and event.kind == "end":
                 emit(Heard("end", "", event.t))
-                self._pool.submit(self._final, np.concatenate(speech), event.t, emit)
+                self._pool.submit(self._final, np.concatenate(speech), event.t, emit, speech_t0)
                 speech = []
             elif self._vad.speaking and t - last_partial >= self._partial_every:
                 if not self._partial_busy.is_set():
@@ -139,10 +162,19 @@ class StreamingRecognizer:
         finally:
             self._partial_busy.clear()
 
-    def _final(self, pcm: np.ndarray, t: float, emit: Callable[[Heard], None]) -> None:
+    def _final(
+        self, pcm: np.ndarray, t: float, emit: Callable[[Heard], None], t0: float = 0.0
+    ) -> None:
+        words: tuple = ()
         try:
-            text = self._stt.transcribe(pcm, SAMPLE_RATE)
+            with_words = getattr(self._stt, "transcribe_words", None)
+            if with_words is None:
+                text = self._stt.transcribe(pcm, SAMPLE_RATE)
+            else:
+                data = with_words(pcm, SAMPLE_RATE)
+                text = str(data.get("text", "")).strip()
+                words = tuple(parse_words(data, offset=t0))
         except Exception as e:  # noqa: BLE001
             log.warning("final transcription failed: %s", e)
             text = ""
-        emit(Heard("final", text, t))
+        emit(Heard("final", text, t, words))
