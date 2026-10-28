@@ -45,7 +45,7 @@ demo, the A/B and the booth.
 | `conventions/` (readings, belief, noise, decide, profiles) | Working, tested |
 | `recorder` (decision log) | Working, tested |
 | `sim/users`, `sim/learn` (simulated users, learning curves) | Working, tested |
-| `runtime/` target-1 integration (T1-08) | In progress |
+| `runtime/` target-1 integration (belief, profiles, recorder) | Working, tested |
 
 ## Run
 
@@ -102,10 +102,9 @@ The SO-101 model is vendored from MuJoCo Menagerie
 (`curio_robot/assets/so101`, Apache-2.0, see its LICENSE).
 
 ## Next (in order)
-1. Runtime integration of target-1 learning (T1-08, in progress).
-2. Live learning demo (T1-10).
-3. Wrist-camera refinement in the sim (fixes occlusion under calibration error; see results.md).
-4. Track 2: real webcam + phone head cam + ArUco → live object map (`real/`).
-5. Live dashboard (three panes + on/off switch) for the stage and booth.
-6. Bring up whisper-server, Kokoro and llama-server on the 7900 XT; measure the real waterfall.
-7. Real SO-101 once the go/no-go gate passes.
+1. Live learning demo (T1-10).
+2. Wrist-camera refinement in the sim (fixes occlusion under calibration error; see results.md).
+3. Track 2: real webcam + phone head cam + ArUco → live object map (`real/`).
+4. Live dashboard (three panes + on/off switch) for the stage and booth.
+5. Bring up whisper-server, Kokoro and llama-server on the 7900 XT; measure the real waterfall.
+6. Real SO-101 once the go/no-go gate passes.
