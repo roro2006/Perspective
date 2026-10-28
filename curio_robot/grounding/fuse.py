@@ -22,4 +22,31 @@ def fuse(
       p(k) ∝ belief[k] * (floor + vlm.get(k, 0)) ** weight. If every product
       is 0, return belief unchanged.
     weight 0 returns the belief unchanged."""
-    raise NotImplementedError("T2-06")
+    # 1. belief empty: VLM decides
+    if not belief:
+        if not vlm:
+            return {}
+        total = sum(vlm.values())
+        if total == 0:
+            return {}
+        return {k: v / total for k, v in vlm.items()}
+
+    # 2. vlm empty: belief unchanged
+    if not vlm:
+        return dict(belief)
+
+    # 3. weight == 0: belief unchanged
+    if weight == 0:
+        return dict(belief)
+
+    # Product of experts over belief keys only
+    products = {}
+    for k, b in belief.items():
+        vlm_val = vlm.get(k, 0.0)
+        products[k] = b * (floor + vlm_val) ** weight
+
+    total = sum(products.values())
+    if total == 0:
+        return dict(belief)
+
+    return {k: p / total for k, p in products.items()}
