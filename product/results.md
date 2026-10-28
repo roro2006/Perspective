@@ -39,3 +39,26 @@ The fixes, in order (these are also the engineering-depth story for judges):
    moves; noise drops roughly with the square root of the number of views.
 
 Re-run: `uv run curio-sim ab --trials 200 --pose-noise 0.01 --rot-noise 2`
+
+## Learning from corrections (target 1)
+
+Simulated users only, not people. Run with `uv run curio-sim learn --user all --baseline` (clean) and `--noise` (1 cm / 2 deg head-pose error). Seed 0, 50 simulated users per type, 15 requests each. Request 1 comes before any correction, so learned and baseline match there by construction.
+
+| Simulated-user type | Clean: error at request 1 | Clean: error at request 15 | Noisy: error at request 1 | Noisy: error at request 15 | Ask rate at request 15, clean / noisy (learned) |
+|---|---|---|---|---|---|
+| own-frame | 4.0% / 4.0% | 10.0% / 10.0% | 2.0% / 2.0% | 6.0% / 6.0% | 0.0% / 0.0% |
+| robot-frame | 78.0% / 78.0% | 2.0% / 82.0% | 80.0% / 80.0% | 2.0% / 82.0% | 6.0% / 4.0% |
+| mixed | 42.0% / 42.0% | 4.0% / 44.0% | 38.0% / 38.0% | 0.0% / 34.0% | 80.0% / 82.0% |
+
+Each error cell is learned / baseline. The baseline never asks.
+
+Re-run:
+
+    uv run curio-sim learn --user all --baseline --out out/learn-clean.json
+    uv run curio-sim learn --user all --baseline --noise --out out/learn-noise.json
+
+Robot-frame simulated users go from 78% wrong at request 1 to 2% wrong at request 15, where the rule baseline stays 82% wrong. Own-frame simulated users match the baseline exactly, and mixed simulated users are mostly asked (80%) rather than guessed, which is intended.
+
+- Own-frame simulated users say the robot's frame 5% of the time, and the robot has no per-utterance cue for that, so about 5% error remains for them; the baseline shows the same 6-10%.
+- Whether real people split between frames this way is open: **[VERIFY: cite an HRI perspective-taking study before this goes on a slide.]**
+- These are simulation numbers, not evidence about real people.
