@@ -4,6 +4,7 @@ decision records and episode log. Task T3-01."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -39,21 +40,76 @@ class Session:
 def session_to_dict(session: Session) -> dict:
     """A JSON-safe dict: every field by name, tuples as lists, each step as a
     dict of its fields (marks copied as a plain dict). No rounding."""
-    raise NotImplementedError("T3-01")
+    return {
+        "session_id": session.session_id,
+        "person": session.person,
+        "condition": session.condition,
+        "task": session.task,
+        "seed": session.seed,
+        "t_start": session.t_start,
+        "t_end": session.t_end,
+        "goals": list(session.goals),
+        "done": list(session.done),
+        "steps": [
+            {
+                "utterance": step.utterance,
+                "kind": step.kind,
+                "text": step.text,
+                "goal_id": step.goal_id,
+                "chosen_id": step.chosen_id,
+                "asked": step.asked,
+                "marks": dict(step.marks),
+            }
+            for step in session.steps
+        ],
+    }
 
 
 def session_from_dict(data: dict) -> Session:
     """Inverse of session_to_dict: lists back to tuples, steps back to Step,
     marks values as float. session_from_dict(session_to_dict(s)) == s."""
-    raise NotImplementedError("T3-01")
+    return Session(
+        session_id=data["session_id"],
+        person=data["person"],
+        condition=data["condition"],
+        task=data["task"],
+        seed=data["seed"],
+        t_start=data["t_start"],
+        t_end=data["t_end"],
+        goals=tuple(data["goals"]),
+        done=tuple(data["done"]),
+        steps=tuple(
+            Step(
+                utterance=step["utterance"],
+                kind=step["kind"],
+                text=step["text"],
+                goal_id=step["goal_id"],
+                chosen_id=step["chosen_id"],
+                asked=step["asked"],
+                marks={k: float(v) for k, v in step["marks"].items()},
+            )
+            for step in data["steps"]
+        ),
+    )
 
 
 def save_sessions(sessions: list[Session], path: Path) -> None:
     """Write one json.dumps(session_to_dict(s)) per line, in order, UTF-8,
     replacing the file. Create parent directories."""
-    raise NotImplementedError("T3-01")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        for s in sessions:
+            f.write(json.dumps(session_to_dict(s)))
+            f.write("\n")
 
 
 def load_sessions(path: Path) -> list[Session]:
     """Read a file written by save_sessions; blank lines are skipped."""
-    raise NotImplementedError("T3-01")
+    sessions: list[Session] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            sessions.append(session_from_dict(json.loads(stripped)))
+    return sessions
