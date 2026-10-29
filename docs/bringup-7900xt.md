@@ -182,9 +182,36 @@ Pitfall: don't compare by switching the adapter's scale on a running server
 (`POST /lora-adapters`). The prompt cache keeps keys and values computed under
 the old scale, so a "base" run after a LoRA run scores like the LoRA. Restart.
 
+## Speech to text: whisper-server
+whisper.cpp release `b5454` (2026-10-06, the build behind v1.9.5), prebuilt
+`whisper-bin-x64.zip` (8 MB, CPU; the Windows releases have no AMD GPU build)
+and `ggml-base.en.bin` (148 MB, Hugging Face `ggerganov/whisper.cpp`), in
+`C:\Users\Rohan\dev\whisper`:
+```powershell
+$w = 'C:\Users\Rohan\dev\whisper'
+& "$w\bin\Release\whisper-server.exe" -m "$w\models\ggml-base.en.bin" `
+  --host 127.0.0.1 --port 8178 -t 8 -ac 512
+```
+`WhisperCppServer`'s guessed request works as is: `response_format=verbose_json`
+with `timestamp_granularities[]=word` returns `segments[].words[]` with `word`,
+`start`, `end` (seconds), plus `t_dtw` and `probability`. Punctuation comes as
+its own word. `anchor.parse_words` needed no change; `anchor_time` lands on
+"that" (`tests/test_t2_whisper_json.py` holds a trimmed real reply).
+
+Latency on the Ryzen 7 7700X, Windows-voice test clips, request to reply:
+
+| Setting | 2 s clip, text / words | 5 s clip, text / words |
+|---|---|---|
+| defaults (`-t 8`, full audio context) | 350 / 670 ms | 400 / 720 ms |
+| `--dtw base.en -nfa` | 660 / 1300 ms | 690 / 1280 ms |
+| **`-ac 512`** | **150 / 330 ms** | **180 / 290 ms** |
+
+`-ac 512` (about 10 s of audio, plenty for one command) gave the same text and
+word times. DTW needs flash attention off, doubles the time and didn't change
+`start`/`end`, so it stays off. Not yet measured: a real microphone and voice,
+and how often the final's words match the last partial (the grounding prefetch).
+
 ## Not done yet
-- **Contention run**: whisper-server, Kokoro and the detector aren't installed
-  on this machine.
-- **Word timestamps** (`anchor.parse_words` vs whisper-server's JSON): needs
-  whisper-server. `WhisperCppServer.transcribe_words` still uses guessed fields.
+- **Contention run**: Kokoro and the detector aren't installed on this machine
+  (whisper-server is, above).
 - **8B comparison**: not run (see above).

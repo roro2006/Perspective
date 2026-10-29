@@ -24,8 +24,9 @@ def parse_words(data: dict, offset: float = 0.0) -> list[Word]:
 
     Accepts either a top-level "words": [{"word", "start", "end"}, ...] or
     "segments": [{"words": [...]}, ...] (concatenated in order). Missing both
-    -> []. Words with empty text after stripping are skipped. The real
-    whisper-server format is confirmed during bring-up (T2-10)."""
+    -> []. Words with empty text after stripping are skipped. whisper-server
+    (whisper.cpp b5454) sends the "segments" form, with punctuation as its own
+    word and times in seconds from the buffer start (checked in T2-10)."""
     raw_words = []
     if "words" in data:
         raw_words = data["words"]

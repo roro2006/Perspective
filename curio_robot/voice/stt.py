@@ -52,8 +52,9 @@ def wav_bytes(pcm: np.ndarray, sample_rate: int) -> bytes:
 
 
 class WhisperCppServer:
-    """whisper.cpp's `whisper-server` (build with -DGGML_VULKAN=1 for the
-    7900 XT), e.g. `whisper-server -m ggml-base.en.bin --port 8178`."""
+    """whisper.cpp's `whisper-server`, e.g.
+    `whisper-server -m ggml-base.en.bin --port 8178 -t 8 -ac 512`. The prebuilt
+    Windows CPU build is enough for short commands (docs/bringup-7900xt.md)."""
 
     def __init__(self, url: str = "http://127.0.0.1:8178", timeout_s: float = 5.0) -> None:
         self._url = url.rstrip("/") + "/inference"
@@ -63,7 +64,8 @@ class WhisperCppServer:
         return self._post(pcm, sample_rate, {"response_format": "json"})["text"].strip()
 
     def transcribe_words(self, pcm: np.ndarray, sample_rate: int) -> dict:
-        """verbose_json with word timestamps; the exact server fields are confirmed in T2-10."""
+        """verbose_json with word timestamps: {"text", "segments": [{"words": [{"word",
+        "start", "end", ...}]}]}, as anchor.parse_words reads it (checked in T2-10)."""
         fields = {"response_format": "verbose_json", "timestamp_granularities[]": "word"}
         return self._post(pcm, sample_rate, fields)
 
