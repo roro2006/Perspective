@@ -6,7 +6,18 @@ import numpy as np
 import pytest
 
 from curio_robot.collab.tasks import TaskScene
-from curio_robot.sim.demos import FORMAT, FPS, load_episode, load_info, record, words_for
+from curio_robot.sim.demos import (
+    FORMAT,
+    FPS,
+    MARKER_COLOUR,
+    MARKER_MODES,
+    draw_marker,
+    load_episode,
+    load_info,
+    marker_uv,
+    record,
+    words_for,
+)
 from curio_robot.sim.physics import ARM_JOINTS
 from curio_robot.sim.world import BlockSpec
 
@@ -84,3 +95,31 @@ def test_words_name_the_side_in_the_persons_frame():
     assert words_for(scene, 0) == ("Hand me the red one on my right", "speaker")
     assert words_for(scene, 1) == ("Hand me the red one on my left", "speaker")
     assert words_for(scene, 2) == ("Hand me the blue one", None)
+
+
+def test_draw_marker_rings_the_target_and_keeps_the_input():
+    rgb = np.zeros((64, 64, 3), np.uint8)
+    out = draw_marker(rgb, (32.0, 32.0), radius=10, width=2)
+    assert not rgb.any()  # the input is not touched
+    assert tuple(out[32, 32 + 10]) == MARKER_COLOUR  # on the ring (pixel centre 42.5 ~ 32 + 10)
+    assert not out[32, 32].any()  # the centre stays clear, so the block shows through
+    assert not out[0, 0].any()
+    ring = (out == MARKER_COLOUR).all(axis=-1)
+    assert 40 < ring.sum() < 200  # a thin ring, not a disc
+
+
+def test_draw_marker_handles_missing_and_edge_targets():
+    rgb = np.full((32, 48, 3), 7, np.uint8)
+    assert np.array_equal(draw_marker(rgb, None), rgb)
+    edge = draw_marker(rgb, (0.0, 0.0), radius=6, width=2)  # partly off the image
+    assert edge.shape == rgb.shape and (edge == MARKER_COLOUR).all(axis=-1).any()
+
+
+def test_marker_uv_modes():
+    episode = {"target_pixel": [10.0, 20.0]}
+    frame = {"target_pixel": [12.0, 5.0]}
+    assert marker_uv(episode, frame) == [10.0, 20.0]
+    assert marker_uv(episode, frame, "track") == [12.0, 5.0]
+    assert set(MARKER_MODES) == {"start", "track"}
+    with pytest.raises(ValueError):
+        marker_uv(episode, frame, "none")
