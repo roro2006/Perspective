@@ -1,7 +1,7 @@
 ---
 id: T5-10
 title: Benchmark kinds hidden-pair and free
-status: todo
+status: done
 agent: claude
 depends: [T5-03, T5-08]
 owns: [curio_robot/bench/items.py, tests/test_t5_bench.py, docs/target5-perspective-policy.md]
