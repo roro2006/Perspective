@@ -3,6 +3,7 @@ instead of parquet (no new dependencies). Frames come later. Task T3-08."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from curio_robot.collab.session import Session
@@ -24,4 +25,68 @@ def export_episodes(sessions: list[Session], out_dir: Path, overwrite: bool = Fa
            chosen_id == goal_id, "t": {stage: round(mark - t_start, 4)}}
     FileExistsError if meta/info.json already exists and not overwrite.
     Returns {"episodes": n, "steps": total steps}."""
-    raise NotImplementedError("T3-08")
+    info_path = out_dir / "meta" / "info.json"
+    if info_path.exists() and not overwrite:
+        raise FileExistsError(str(info_path))
+
+    meta_dir = out_dir / "meta"
+    data_dir = out_dir / "data"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    total_steps = sum(len(s.steps) for s in sessions)
+    conditions = sorted({s.condition for s in sessions})
+
+    info = {
+        "format": FORMAT,
+        "total_episodes": len(sessions),
+        "total_steps": total_steps,
+        "conditions": conditions,
+    }
+    with info_path.open("w", encoding="utf-8") as f:
+        f.write(json.dumps(info))
+
+    episodes_lines = []
+    for idx, session in enumerate(sessions):
+        goals = list(session.goals)
+        done = list(session.done)
+        success = len(done) / len(goals) if goals else 0.0
+        ep = {
+            "episode_index": idx,
+            "session_id": session.session_id,
+            "person": session.person,
+            "condition": session.condition,
+            "task": session.task,
+            "seed": session.seed,
+            "length": len(session.steps),
+            "goals": goals,
+            "done": done,
+            "success": success,
+        }
+        episodes_lines.append(json.dumps(ep))
+
+    with (meta_dir / "episodes.jsonl").open("w", encoding="utf-8") as f:
+        for line in episodes_lines:
+            f.write(line + "\n")
+
+    for idx, session in enumerate(sessions):
+        ep_path = data_dir / f"episode_{idx:06d}.jsonl"
+        with ep_path.open("w", encoding="utf-8") as f:
+            for step_idx, step in enumerate(session.steps):
+                t = {stage: round(mark - session.t_start, 4) for stage, mark in step.marks.items()}
+                correct = step.chosen_id is not None and step.chosen_id == step.goal_id
+                rec = {
+                    "episode_index": idx,
+                    "step_index": step_idx,
+                    "utterance": step.utterance,
+                    "kind": step.kind,
+                    "text": step.text,
+                    "goal_id": step.goal_id,
+                    "chosen_id": step.chosen_id,
+                    "asked": step.asked,
+                    "correct": correct,
+                    "t": t,
+                }
+                f.write(json.dumps(rec) + "\n")
+
+    return {"episodes": len(sessions), "steps": total_steps}
