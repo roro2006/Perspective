@@ -281,3 +281,46 @@ What it shows, and what it does not:
 - Mixed people stay at 0.42 under every source, including the oracle: a policy
   that picks one frame per person cannot serve someone who uses both 50/50.
   Target 1 handles them by asking, which this learner does not do.
+
+## Perspective benchmark (target 5, phase 1 and first phase 2 scores)
+
+200 simulated items, 50 per kind, seed 0 (`docs/target5-perspective-policy.md`).
+Each grounder is Qwen3-VL-4B Q8_0 on llama.cpp; "LoRA" is the target-2 adapter
+(trained on single-view examples with geometry hints). Run 2026-10-29:
+
+    uv run curio-sim bench gen --n-per-kind 50 --seed 0 --out out/bench5
+    uv run curio-sim bench score --data out/bench5 --url http://127.0.0.1:8081/v1
+
+Accuracy (the block the person meant):
+
+| kind | rule (no VLM) | base: geometry | base: paired | base: robot-only | LoRA: geometry | LoRA: paired | LoRA: robot-only |
+|---|---|---|---|---|---|---|---|
+| color | 1.00 | 1.00 | 1.00 | 0.86 | 1.00 | 1.00 | 0.86 |
+| marked ("my/your left") | 1.00 | 0.52 | 0.52 | 0.38 | **0.94** | 0.62 | 0.38 |
+| habit ("the left" + habit) | 0.76 | 0.38 | 0.38 | 0.44 | 0.70 | 0.54 | 0.50 |
+| hidden from the robot | 1.00 | 1.00 | 1.00 | 0.00 | 1.00 | 1.00 | 0.00 |
+| overall | 0.94 | 0.72 | 0.72 | 0.42 | 0.91 | 0.79 | 0.43 |
+
+What it shows:
+- **Without the person's view a robot cannot do this.** Robot-only is 0.38-0.50
+  on left/right requests and 0.00 on blocks only the person can see.
+- **The base VLM cannot resolve perspective, with or without hints.** "my/your
+  left" is at chance (0.52) even when every block is labelled with its side in
+  both frames; geometry and paired give identical answers, which points to a
+  letter-position default rather than reasoning.
+- **The target-2 LoRA uses the geometry.** 0.94 on marked requests in the
+  geometry condition, against 0.62 when it must infer perspective from two
+  images. So the value is in computing perspective from the registered head
+  camera, then having a tuned model read it.
+- **The rule beats every VLM on these kinds** (0.94 overall), because these
+  requests have exact geometric answers. The VLM earns its place on what the
+  rule cannot parse ("that one", free wording), which this benchmark does not
+  yet include.
+
+Phase 2 gate check (design doc section 4), on the existing LoRA:
+- colour >= 0.95 (1.00) and marked >= 0.85 in geometry (0.94): **met**.
+- geometry beats paired and robot-only on marked (0.94 > 0.62, 0.38) and habit
+  (0.70 > 0.54, 0.50): met. On hidden it ties paired (1.00 = 1.00): **not
+  met** as written. The flaw is in the benchmark: hidden targets are a unique
+  colour, so any condition with the person view finds them. A fair hidden kind
+  needs a same-colour pair with one hidden.
