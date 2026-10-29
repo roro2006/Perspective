@@ -11,7 +11,9 @@ the arm and the voice do. This is where the pipelining happens:
   Interrupt / "no"    -> stop the arm, stop talking, learn from the correction
   ArmEvent            -> waterfall marks, "can't reach that", accept window
   GroundingReply      -> target 2: the grounder's view of the frame at the key word,
-                         fused with the belief; it may redirect or settle "that one"
+                         fused with the belief; it may redirect or settle "that one".
+                         A partial naming the object is scored early; the final
+                         reuses that answer when it says the same thing
 
 Every decision goes to the DecisionRecorder and every outcome (accepted,
 corrected, answered) updates the person's ConventionBelief (docs/target1-conventions.md)."""
@@ -22,8 +24,8 @@ import queue
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import numpy as np
@@ -35,7 +37,7 @@ from curio_robot.conventions.profiles import ProfileStore
 from curio_robot.conventions.readings import Frame, Reading, enumerate_readings
 from curio_robot.episode_log import EpisodeLog
 from curio_robot.events import ArmEvent, Event, GroundingReply, Heard, Interrupt, VlmReply
-from curio_robot.grounding.anchor import anchor_time
+from curio_robot.grounding.anchor import DEICTIC, anchor_time
 from curio_robot.grounding.client import GroundingAnswer
 from curio_robot.grounding.fuse import fuse
 from curio_robot.grounding.history import FrameHistory
@@ -43,7 +45,7 @@ from curio_robot.grounding.marks import place_marks, render_marks
 from curio_robot.grounding.prompt import GroundingRequest, build_request
 from curio_robot.monitor import check_speech
 from curio_robot.recorder import DecisionRecord, DecisionRecorder, Stage
-from curio_robot.resolver import parse_request
+from curio_robot.resolver import COLORS, parse_request
 from curio_robot.runtime.motion import Motion
 from curio_robot.runtime.slot import Latest
 from curio_robot.runtime.trace import Tracer
@@ -58,6 +60,12 @@ ACCEPT_WINDOW_S = 2.0  # an arrival nobody complains about within this long coun
 # explicit "my left" or a learned habit. Target 2 replaces this with the VLM's
 # own probabilities.
 VLM_VOTE = 2.0
+# Target 2 (docs/target2-grounding.md section 3): a partial that names the object
+# is grounded on the latest frame. The final reuses that answer if it says the
+# same words and its key word is within this long of the prefetched frame
+# (gaze drifts; an older look is a different question).
+PREFETCH_MAX_SKEW_S = 0.75
+_GROUND_WORDS = frozenset((*COLORS, *DEICTIC))
 
 
 def confirmation(text: str, color: str) -> str:
@@ -91,6 +99,22 @@ def answer_frame(text: str) -> Frame | None:
         elif word in ("yours", "your"):
             frame = "robot"
     return frame
+
+
+def _words_key(text: str) -> str:
+    """The words of a transcript, so "Hand me that one." matches "hand me that one"."""
+    return " ".join(re.findall(r"[a-z]+", text.lower()))
+
+
+@dataclass(frozen=True, slots=True)
+class _Prefetch:
+    """A grounding request sent on a partial transcript."""
+
+    utterance: int
+    key: str  # _words_key of the partial
+    frame: CameraFrame
+    t: float  # when the frame was taken (perf_counter)
+    future: Future
 
 
 @dataclass(slots=True)
@@ -157,6 +181,7 @@ class Orchestrator:
         self._words: tuple = ()  # word timings of the last final transcript
         self._speech_end = 0.0  # its speech-end time, the anchor when there are no words
         self._ground_job: _Pending | None = None  # the decision a GroundingReply judges
+        self._prefetch: _Prefetch | None = None  # grounded on a partial, maybe reused
         self._running = False
         self._thread = threading.Thread(target=self._loop, name="orchestrator", daemon=True)
 
@@ -202,6 +227,7 @@ class Orchestrator:
             self.utterance += 1
             self._interrupted, self._spoken = False, False
             self._partial_key = None
+            self._prefetch = None
             self._accept_closing = self._accept is not None
             self.done.clear()
             self._voice.interrupt()  # barge-in: the human talks, the robot stops talking
@@ -220,6 +246,7 @@ class Orchestrator:
             self._tracer.mark(u, "first_partial")
             if not self._interrupted:
                 self._speculate(e.text)
+                self._prefetch_grounding(u, e.text)
             return
         self._tracer.mark(u, "final_transcript")
         self._words, self._speech_end = e.words, e.t
@@ -398,14 +425,54 @@ class Orchestrator:
             return False
         self._ground_job = _Pending(u, text, readings, chosen_id)
         self._tracer.mark(u, "ground_sent")
+        pre, self._prefetch = self._prefetch, None
+        look = self._speech_end if anchor is None else anchor
+        if pre is not None and pre.utterance == u and pre.key == _words_key(text) and (
+            pre.frame is frame or abs(pre.t - look) <= PREFETCH_MAX_SKEW_S
+        ):
+            self._tracer.mark(u, "ground_reused")
+            pre.future.add_done_callback(self._post_prefetched)
+            return True
         self._pool.submit(self._ask_grounder, u, text, object_map, frame,
                           self.belief.p_own_frame())
         return True
 
+    def _prefetch_grounding(self, u: int, text: str) -> None:
+        """Ground a partial that names the object (a colour or "that") on the
+        latest frame, so the final can reuse the answer. One request in flight:
+        the grounder serves one at a time, and a newer partial waits its turn."""
+        if self._grounder is None or self._history is None:
+            return
+        key = _words_key(text)
+        if not _GROUND_WORDS.intersection(key.split()):
+            return
+        pre = self._prefetch
+        if pre is not None and pre.utterance == u and (pre.key == key or not pre.future.done()):
+            return
+        _, object_map = self._maps.get()
+        frame = self._history.latest()
+        if object_map is None or frame is None:
+            return
+        future = self._pool.submit(self._score_grounding, u, text, object_map, frame,
+                                   self.belief.p_own_frame())
+        self._prefetch = _Prefetch(u, key, frame, time.perf_counter(), future)
+        self._tracer.mark(u, "ground_prefetch")
+
+    def _post_prefetched(self, future: Future) -> None:
+        """Post a reused prefetch reply, stamped now: that is when the final can use it."""
+        if not future.cancelled():
+            self._bus.put(replace(future.result(), t=time.perf_counter()))
+
     def _ask_grounder(
         self, u: int, text: str, object_map: ObjectMap, frame: CameraFrame, p_own_frame: float
     ) -> None:
-        """Marks, render, request, score; always posts a reply so the utterance finishes."""
+        """Score and post; always posts a reply so the utterance finishes."""
+        self._bus.put(self._score_grounding(u, text, object_map, frame, p_own_frame))
+
+    def _score_grounding(
+        self, u: int, text: str, object_map: ObjectMap, frame: CameraFrame, p_own_frame: float
+    ) -> GroundingReply:
+        """Marks, render, request, score. Never raises: a failure is a reply with no probs."""
         try:
             marks = place_marks(object_map, frame)
             image, _ = render_marks(frame, marks)
@@ -415,7 +482,7 @@ class Orchestrator:
                                    answer.latency_ms, time.perf_counter())
         except Exception as e:  # noqa: BLE001 - a broken request degrades to "unavailable"
             reply = GroundingReply(u, {}, None, f"error: {e}", 0.0, time.perf_counter())
-        self._bus.put(reply)
+        return reply
 
     def _on_grounding(self, r: GroundingReply) -> None:
         """Fuse the grounder's probabilities with the belief, then decide: it may

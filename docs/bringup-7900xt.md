@@ -175,6 +175,9 @@ loses about 2 points against bf16, mostly on deictic (Q8_0 base weights).
 `bench_grounding.py --n 150 --seed 7` (fresh scenes, not the training seed)
 agrees: 0.79 with the LoRA vs 0.63 without, p50 102 vs 103 ms.
 
+Live runtime: `uv run curio-sim live perspective --runs 10 --grounder-url
+http://127.0.0.1:8081/v1` succeeds 10/10 (occlusion and cluttered 5/5 each).
+
 Pitfall: don't compare by switching the adapter's scale on a running server
 (`POST /lora-adapters`). The prompt cache keeps keys and values computed under
 the old scale, so a "base" run after a LoRA run scores like the LoRA. Restart.
@@ -184,6 +187,4 @@ the old scale, so a "base" run after a LoRA run scores like the LoRA. Restart.
   on this machine.
 - **Word timestamps** (`anchor.parse_words` vs whisper-server's JSON): needs
   whisper-server. `WhisperCppServer.transcribe_words` still uses guessed fields.
-- **Live runtime on the adapter**: llama-server serves it (above), but the
-  runtime CLI has no `--grounder-url` flag yet (T2-11 notes).
 - **8B comparison**: not run (see above).

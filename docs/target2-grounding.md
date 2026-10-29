@@ -39,6 +39,11 @@ is one token; the latency is the image prefill.
   usually arrives before you finish the sentence. The request can be sent on
   the partial transcript that contains the key word and cancelled if the
   final transcript differs.
+  Done in the orchestrator: a partial naming a colour or "that" is scored on
+  the latest frame, one request in flight. The final reuses the answer if its
+  words match and its key word is within 0.75 s of that frame; otherwise it
+  asks again. In the live sim the reply is ready with the final transcript
+  (about 190 ms after speech end, was about 580 ms).
 - The crop keeps image tokens low: candidates plus a margin, longest side
   ≤ 448 px.
 - The arm is already moving on the target-1 decision; the grounder confirms,

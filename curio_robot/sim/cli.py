@@ -3,6 +3,7 @@
     uv run curio-sim shot perspective --seed 3 --out out/shots
     uv run curio-sim ab --trials 200 --pose-noise 0.01 --rot-noise 2
     uv run curio-sim live perspective --seed 3 --vlm-latency 0.6
+    uv run curio-sim live perspective --grounder-url http://127.0.0.1:8081/v1
     uv run curio-sim learn --user all --users 50 --noise --baseline
     uv run curio-sim learn --live --user robot-frame --requests 6
 """
@@ -50,6 +51,7 @@ def main(argv: list[str] | None = None) -> None:
     v.add_argument("--runs", type=int, default=1, help="seeds seed..seed+runs-1")
     v.add_argument("--vlm-latency", type=float, default=0.6, help="mock VLM delay, s")
     v.add_argument("--llm-url", help="OpenAI-compatible endpoint instead of the mock")
+    v.add_argument("--grounder-url", help="target 2: grounder endpoint (llama-server / vLLM)")
     v.add_argument("--off", action="store_true", help="Curio off: robot camera only")
 
     lr = sub.add_parser("learn", help="learning curves: simulated users, error rate per request")
@@ -106,6 +108,7 @@ def _live(args) -> None:
         r = run_live(
             args.scenario, seed, vlm_latency=args.vlm_latency, llm_url=args.llm_url,
             use_human_view=not args.off, quiet=args.runs > 1, world=world,
+            grounder_url=args.grounder_url,
         )
         results.append(r)
         if args.runs == 1:
@@ -121,7 +124,10 @@ def _live(args) -> None:
             "curio": "off" if args.off else "on",
             "success_pct": round(100 * float(np.mean([r["success"] for r in results])), 1),
             "p50_ms_from_speech_end": {
-                s: p50(s) for s in ("motion_start", "final_transcript", "vlm_reply", "arrived")
+                s: p50(s) for s in (
+                    "motion_start", "final_transcript", "vlm_reply", "ground_sent",
+                    "ground_reply", "arrived",
+                )
             },
         }, indent=2))
 
