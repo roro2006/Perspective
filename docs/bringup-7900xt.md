@@ -215,3 +215,28 @@ and how often the final's words match the last partial (the grounding prefetch).
 - **Contention run**: Kokoro and the detector aren't installed on this machine
   (whisper-server is, above).
 - **8B comparison**: not run (see above).
+
+## SmolVLA (target 5, phase 4)
+Set up 2026-10-29, approved downloads only:
+- **Environment:** `C:\Users\Rohan\dev\lerobot-rocm\.venv`, a copy of the
+  `rocm-train` venv (keeps torch 2.9.1+rocm7.2.1, no PyTorch re-download), then
+  `uv pip install --python <that python> "lerobot[smolvla]==0.6.1" "mujoco==3.17.0"`.
+  Separate on purpose: lerobot pins transformers 5.5.4, numpy 2.2.6 and
+  huggingface-hub 1.33, which would downgrade `rocm-train` (still on
+  transformers 5.21, numpy 2.5.4).
+- **Weights:** `lerobot/smolvla_base` (907 MB) plus the SmolVLM2-500M config
+  and tokenizer files only (4.9 MB). The checkpoint config says
+  `load_vlm_weights: true`, which would also fetch SmolVLM2 `model.safetensors`
+  (2 GB); not needed, because the SmolVLA checkpoint holds the backbone.
+- **Load (offline):** `cfg = PreTrainedConfig.from_pretrained(snapshot_dir)`;
+  `cfg.load_vlm_weights = False`; `SmolVLAPolicy.from_pretrained(snapshot_dir,
+  config=cfg)` with `HF_HUB_OFFLINE=1`. Pass the snapshot folder, not the repo
+  name: offline mode refuses a partial snapshot by name (we skipped the
+  notebook and GIF). All 500 checkpoint tensors load; vision, text and expert
+  tensors checked equal to the file.
+- **Speed on the RX 7900 XT:** 450 M parameters, one 50-step action chunk
+  (three 256x256 images, 6-joint state, the words) in about 340 ms after a 6 s
+  first call; 1.37 GB GPU memory.
+- **Inputs it was trained for:** `observation.state`, `observation.images.camera1..3`,
+  `action`; our demonstrations have two cameras (robot, person) and 6 joints, so
+  fine-tuning remaps the features.
