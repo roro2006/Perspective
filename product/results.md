@@ -62,3 +62,85 @@ Robot-frame simulated users go from 78% wrong at request 1 to 2% wrong at reques
 - Own-frame simulated users say the robot's frame 5% of the time, and the robot has no per-utterance cue for that, so about 5% error remains for them; the baseline shows the same 6-10%.
 - Whether real people split between frames this way is open: **[VERIFY: cite an HRI perspective-taking study before this goes on a slide.]**
 - These are simulation numbers, not evidence about real people.
+
+## Working together (target 3)
+
+Simulated people only. Each task is 4 requests in one session through the full
+live runtime (rendering, perception, partial transcripts, motion, voice), on a
+scene with two same-coloured pairs and a single block. 10 tasks per cell
+(seeds 100-109, the same scenes in every condition), means per task. The
+person looks at each block as they ask for it and takes 0.9 s to say "no" to a
+wrong pick, in every condition; the conditions differ only in what the robot
+uses. Definitions: `docs/target3-collaboration.md`, section 3.
+
+Run 2026-10-29:
+
+    uv run curio-sim collab --user own-frame --tasks 10 --goals 4 --conditions view-off,view-on,view-on+gaze --seed 100 --out out/collab/own-frame --export out/collab/own-frame/dataset
+    (same with --user robot-frame and --user mixed)
+
+**Means "my left" (own-frame):**
+
+| metric | view-off | view-on | view-on+gaze |
+|---|---|---|---|
+| success | 0.80 | 1.00 | 1.00 |
+| turns per task | 7.0 | 4.5 | 4.3 |
+| corrections per task | 2.5 | 0.2 | 0.0 |
+| questions per task | 0.5 | 0.3 | 0.3 |
+| task time, s | 29.2 | 19.7 | 19.2 |
+| arm moving while they talk (concurrent_frac) | 0.11 | 0.24 | 0.25 |
+| arm starts before they finish, s (functional delay) | -0.92 | -1.40 | -1.45 |
+
+**Means "the robot's left" (robot-frame):**
+
+| metric | view-off | view-on | view-on+gaze |
+|---|---|---|---|
+| success | 0.90 | 1.00 | 1.00 |
+| turns per task | 4.4 | 6.8 | 5.9 |
+| corrections per task | 0.4 | 1.0 | 0.1 |
+| questions per task | 0.0 | 1.8 | 1.8 |
+| task time, s | 21.7 | 23.2 | 21.3 |
+| concurrent_frac | 0.21 | 0.06 | 0.12 |
+
+**Either, 50/50 (mixed):**
+
+| metric | view-off | view-on | view-on+gaze |
+|---|---|---|---|
+| success | 0.90 | 1.00 | 1.00 |
+| turns per task | 5.2 | 6.0 | 5.4 |
+| corrections per task | 1.1 | 0.8 | 0.2 |
+| questions per task | 0.1 | 1.2 | 1.2 |
+| task time, s | 23.8 | 22.2 | 20.8 |
+
+Reply time (speech end to the robot starting to speak) was 0.19-0.20 s in
+every cell. Full tables, sessions and the exported dataset (90 episodes, 495
+steps): `out/collab/<user>/` (not in git).
+
+What this shows:
+- **The person's view lets every task finish.** Success is 1.00 with the view
+  on for all three kinds of person, 0.8-0.9 without it (goals given up after two
+  corrections).
+- **For people who mean their own left, it removes most of the work:**
+  corrections 2.5 to 0.2 per task, turns 7.0 to 4.5, task time 29 to 20 s, and
+  the arm moves while they are still talking about twice as much.
+- **Gaze removes most of the remaining spoken corrections:** 0.0, 0.1 and 0.2
+  per task with gaze on, against 0.2, 1.0 and 0.8 without. Across the 30 gaze
+  tasks it re-targeted 17 times (2 own-frame, 9 robot-frame, 6 mixed), and all
+  17 ended on the block the person wanted. It only acts on another reading of
+  the current request.
+- **The cost: people who mean the robot's left get asked.** The robot-camera
+  baseline already reads "left" from the robot's side, which is exactly what
+  these people mean, so for them view-off is the cheapest on turns. With the
+  view on, the belief starts at "their left", gets corrected, and then asks
+  "your left or mine?" (1.8 questions per task) until it is sure.
+
+Limits:
+- Simulated people, not real ones; the pilot protocol
+  (`docs/pilot-protocol.md`) is how to get real numbers.
+- **Each task starts from a fresh profile**, so these numbers show learning
+  within 4 requests only. Carrying the profile across tasks (as across days with
+  one person) should cut the robot-frame questions, as target 1's curves
+  suggest; that run hasn't been done.
+- The sim gives the robot the exact head pose; head-tracking error (which hurt
+  occlusion badly in Phase 0) isn't applied here, so gaze is at its best case.
+- No "that one" requests and no grounder in this run (the GPU was serving the
+  coding model). 10 tasks per cell, means only, no intervals.
