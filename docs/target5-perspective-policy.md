@@ -74,6 +74,46 @@ on those demonstrations, conditioned on the target point.
           --out out/smolvla/run1 --steps 2500 --batch-size 32 --workers 4
           --log-freq 25 --eval-freq 250 --save-freq 500   # --resume to continue
 
+### Evaluation (T5-08)
+`scripts/smolvla_eval.py` (lerobot venv) rolls a checkpoint out in closed loop
+in `PhysWorld`, on scenes it never trained on.
+- **Scenes:** `fetch_scene(default_rng(s))` without the box for s = 50000,
+  50001, ... (demos used 1000-1300); the target is a random block of a
+  same-colour pair, so the words (`demos.words_for`) always say "on my
+  left/right". A seed is skipped if either pair block projects outside the
+  robot image. Every condition runs on the same scenes, targets and policy
+  noise seed.
+- **Conditions:** `marker` (ring on the target, words name it), `words` (no
+  ring), `swapped` (ring on the pair partner, words name the target: does the
+  policy follow the ring or the words?).
+- **Timing as recorded:** observe at 10 Hz (camera1 = robot view + ring at the
+  ring block's start pixel, camera2 = person's view, 6 joints), call
+  `policy.select_action`, and let each action cover 0.1 s (5 ticks of 20 ms,
+  ctrl ramped linearly from the previous action as the expert's ramp was;
+  `--ctrl hold` holds it). A model call returns a chunk and `n_action_steps`
+  of it run open loop, as in lerobot's eval (the checkpoint's 50 by default:
+  one call plans most of a pick; `--n-action-steps 10` re-observes every 1 s).
+  Horizon 6 s (demo episodes are 4.1 s).
+- **What counts as a pick:** a block stays lifted >= 3 cm for 0.5 s
+  (`expert.LIFT_HEIGHT`, `HOLD_TIME`), checked every 20 ms tick; the rollout
+  stops there. Outcome `target`, `partner`, `other` or `nothing`, plus time to
+  lift (start of the held lift) and the target's highest lift.
+- **Outputs** in `--out`: `results.json` (settings, per-condition rates, mean
+  time to lift, seconds per model call and per rollout, every rollout) and
+  `frames/<condition>_<frame>.png` for the first scene of each condition
+  (camera1 as the policy saw it | person view | overview, every 10th frame and
+  the last).
+- **CPU smoke** (100-step smoke checkpoint, 2 scenes, `marker`, 3 s horizon):
+  41 s per model call on CPU (8 threads), 41 s per rollout (one call, 30
+  frames), 17 s to load; both picked nothing, as expected at 100 steps. The
+  process exits cleanly (no DataLoader). CPU is only for checking the loop.
+- **Real run (GPU, after training finishes):** from the repo root,
+
+      set HF_HUB_OFFLINE=1 HF_HUB_DISABLE_SYMLINKS_WARNING=1
+      <lerobot venv>/python scripts/smolvla_eval.py
+          --checkpoint out/smolvla/run1/checkpoints/002500/pretrained_model
+          --n 50 --device cuda --out out/smolvla/eval_run1
+
 ## 4. Gates (fixed before results)
 - Phase 1: benchmark generation is deterministic per seed; every item's target
   is the block its words and frame pick.
