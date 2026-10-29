@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from curio_robot.collab.gaze import GAZE_MAX_DEG  # noqa: F401 (used by the implementation)
-from curio_robot.critic.episodes import HOME, Episode  # noqa: F401 (used by the implementation)
-from curio_robot.runtime.motion import SPEED  # noqa: F401 (used by the implementation)
+from curio_robot.collab.gaze import GAZE_MAX_DEG
+from curio_robot.critic.episodes import HOME, Episode
+from curio_robot.runtime.motion import SPEED
 
 FEATURES = (
     "angle",  # head direction to block, deg / GAZE_MAX_DEG, clipped to ANGLE_CLIP
@@ -31,6 +31,70 @@ SINCE_CAP = 2.0
 HEAD_SPEED_SCALE = 100.0
 
 
+def _angles_deg(head_fwd: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """(F, N) degrees between each head_fwd[f] (F, 3) and each v[j] (N, 3)."""
+    unit_v = v / np.linalg.norm(v, axis=-1, keepdims=True)
+    cos = np.clip(head_fwd @ unit_v.T, -1.0, 1.0)
+    return np.degrees(np.arccos(cos))
+
+
+def _dwell(t: np.ndarray, angles: np.ndarray) -> np.ndarray:
+    """(F, N) seconds each block has been inside the gaze cone, unbroken."""
+    n_frames, n_blocks = angles.shape
+    dwell = np.zeros((n_frames, n_blocks))
+    for j in range(n_blocks):
+        run_start: int | None = None
+        for f in range(n_frames):
+            if angles[f, j] > GAZE_MAX_DEG:
+                run_start = None
+                continue
+            if run_start is None:
+                run_start = f
+            dwell[f, j] = min(t[f] - t[run_start], DWELL_CAP)
+    return dwell
+
+
+def _approach(dist: np.ndarray, dt: float) -> np.ndarray:
+    """(F, N) closing speed in units of SPEED from unscaled distances (F, N)."""
+    approach = np.zeros_like(dist)
+    approach[1:] = (dist[:-1] - dist[1:]) / dt / SPEED
+    return approach
+
+
+def _progress(gripper: np.ndarray) -> np.ndarray:
+    """(F,) reach progress in [0, 1], 1.0 everywhere if HOME is at the goal."""
+    denom = np.linalg.norm(HOME - gripper[-1])
+    if denom == 0:
+        return np.ones(len(gripper))
+    moved = np.linalg.norm(gripper - gripper[-1], axis=-1)
+    return np.clip(1.0 - moved / denom, 0.0, 1.0)
+
+
+def _speech_flags(
+    t: np.ndarray, speech: tuple[tuple[float, str], ...]
+) -> tuple[np.ndarray, np.ndarray]:
+    """(F,) said_no and since_no, from the first transcript starting with "no"."""
+    no_times = [ts for ts, text in speech if text.startswith("no")]
+    said = np.zeros(len(t))
+    since = np.zeros(len(t))
+    if not no_times:
+        return said, since
+    first = min(no_times)
+    heard = t >= first
+    said[heard] = 1.0
+    since[heard] = np.minimum(t[heard] - first, SINCE_CAP)
+    return said, since
+
+
+def _head_speed(t: np.ndarray, head_fwd: np.ndarray) -> np.ndarray:
+    """(F,) head turn since the previous frame, deg/s / HEAD_SPEED_SCALE."""
+    speed = np.zeros(len(t))
+    if len(t) > 1:
+        cos = np.clip(np.sum(head_fwd[1:] * head_fwd[:-1], axis=-1), -1.0, 1.0)
+        speed[1:] = np.degrees(np.arccos(cos)) / (t[1] - t[0]) / HEAD_SPEED_SCALE
+    return speed
+
+
 def features(ep: Episode) -> np.ndarray:
     """(F, N, D) float array, columns in FEATURES order.
 
@@ -52,5 +116,21 @@ def features(ep: Episode) -> np.ndarray:
     - since_no: min(t[f] - first such ts, SINCE_CAP) once said_no, else 0.
     - head_speed: 0 at f = 0; else degrees between head_fwd[f-1] and
       head_fwd[f], / dt / HEAD_SPEED_SCALE. Same for every block."""
-    raise NotImplementedError("T4-03")
+    n_frames, n_blocks = len(ep.t), len(ep.obj_pos)
+    angles = _angles_deg(ep.head_fwd, ep.obj_pos - ep.head_pos)
+    dist = np.linalg.norm(ep.gripper[:, None, :] - ep.obj_pos[None, :, :], axis=-1)
+    dt = ep.t[1] - ep.t[0] if n_frames > 1 else 1.0
+    said, since = _speech_flags(ep.t, ep.speech)
 
+    out = np.zeros((n_frames, n_blocks, D))
+    out[:, :, FEATURES.index("angle")] = np.minimum(angles / GAZE_MAX_DEG, ANGLE_CLIP)
+    out[:, :, FEATURES.index("dwell")] = _dwell(ep.t, angles)
+    out[:, :, FEATURES.index("is_arm_target")] = np.arange(n_blocks) == ep.arm_target
+    out[:, :, FEATURES.index("grip_dist")] = np.minimum(dist / DIST_SCALE, DIST_CLIP)
+    out[:, :, FEATURES.index("approach")] = _approach(dist, dt)
+    out[:, :, FEATURES.index("candidate")] = ep.candidates
+    out[:, :, FEATURES.index("progress")] = _progress(ep.gripper)[:, None]
+    out[:, :, FEATURES.index("said_no")] = said[:, None]
+    out[:, :, FEATURES.index("since_no")] = since[:, None]
+    out[:, :, FEATURES.index("head_speed")] = _head_speed(ep.t, ep.head_fwd)[:, None]
+    return out
