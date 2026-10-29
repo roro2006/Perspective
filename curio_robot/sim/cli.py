@@ -9,6 +9,7 @@
     uv run curio-sim collab --tasks 5 --conditions view-off,view-on --user mixed --export out/dataset
     uv run curio-sim critic phase1 --out out/critic
     uv run curio-sim bench gen --n-per-kind 50 --out out/bench5
+    uv run curio-sim demos --n 20 --seed 0 --out out/demos
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import numpy as np
 from curio_robot.bench import cli as bench_cli
 from curio_robot.critic import cli as critic_cli
 from curio_robot.grounding.client import DEFAULT_URL, VllmGrounder
-from curio_robot.sim import ab
+from curio_robot.sim import ab, demos
 from curio_robot.sim.ground_eval import DEFAULT_MAX_P95_MS, run_ground_eval
 from curio_robot.sim.learn import learning_curve, live_learning
 from curio_robot.sim.scenarios import SCENARIOS
@@ -91,6 +92,14 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--out", type=Path, default=Path("out/collab"))
     c.add_argument("--export", type=Path, default=None, help="write the dataset here")
 
+    d = sub.add_parser("demos", help="record scripted pick demonstrations (T5-05)")
+    d.add_argument("--n", type=int, default=20)
+    d.add_argument("--seed", type=int, default=0)
+    d.add_argument("--out", type=Path, default=Path("out/demos"))
+    d.add_argument("--size", default="320x240", help="image size, e.g. 320x240")
+    d.add_argument("--include-failed", action="store_true")
+    d.add_argument("--overwrite", action="store_true")
+
     critic_cli.add_parser(sub)
     bench_cli.add_parser(sub)
 
@@ -114,6 +123,10 @@ def main(argv: list[str] | None = None) -> None:
         critic_cli.run(args)
     elif args.cmd == "bench":
         bench_cli.run(args)
+    elif args.cmd == "demos":
+        width, height = (int(v) for v in args.size.split("x"))
+        print(json.dumps(demos.record(args.n, args.seed, args.out, width, height,
+                                      args.include_failed, args.overwrite)))
     else:
         result = ab.run(args.trials, args.seed, args.pose_noise, args.rot_noise)
         ab.save(result, args.out)
