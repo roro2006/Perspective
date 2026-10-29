@@ -97,3 +97,14 @@ tool loads by default.
 
 The same GPU serves the runtime's VLM, Whisper and Kokoro. Don't run dev
 agents and a latency measurement at the same time.
+
+## Target 4 waves (reaction critic, phase 1)
+Design: [`docs/target4-critic.md`](../docs/target4-critic.md).
+
+| Wave | Cards (parallel within a wave) | Agent |
+|---|---|---|
+| 0 | T4-00 contracts, tests, board | done |
+| 1 | T4-01 reactions, T4-03 features, T4-04 model, T4-05 baseline, T4-06 evaluate | Qwen x5 |
+| 2 | T4-02 episodes (needs 01) | Qwen |
+| 3 | T4-07 `curio-sim critic` (needs 02-06) | any |
+| 4 | T4-08 phase 1 run and write-up (needs 07) | Claude |
