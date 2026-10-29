@@ -7,6 +7,7 @@
     uv run curio-sim learn --user all --users 50 --noise --baseline
     uv run curio-sim learn --live --user robot-frame --requests 6
     uv run curio-sim collab --tasks 5 --conditions view-off,view-on --user mixed --export out/dataset
+    uv run curio-sim critic phase1 --out out/critic
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from curio_robot.critic import cli as critic_cli
 from curio_robot.grounding.client import DEFAULT_URL, VllmGrounder
 from curio_robot.sim import ab
 from curio_robot.sim.ground_eval import DEFAULT_MAX_P95_MS, run_ground_eval
@@ -87,6 +89,8 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--out", type=Path, default=Path("out/collab"))
     c.add_argument("--export", type=Path, default=None, help="write the dataset here")
 
+    critic_cli.add_parser(sub)
+
     args = parser.parse_args(argv)
     if args.cmd == "shot":
         pane = tuple(int(v) for v in args.size.split("x"))
@@ -103,6 +107,8 @@ def main(argv: list[str] | None = None) -> None:
         _ground_eval(args)
     elif args.cmd == "collab":
         _collab(args)
+    elif args.cmd == "critic":
+        critic_cli.run(args)
     else:
         result = ab.run(args.trials, args.seed, args.pose_noise, args.rot_noise)
         ab.save(result, args.out)
