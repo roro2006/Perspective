@@ -1,7 +1,7 @@
 ---
 id: T4-07
 title: curio-sim critic (gen, train, eval, phase1)
-status: todo
+status: done
 agent: any
 depends: [T4-02, T4-03, T4-04, T4-05, T4-06]
 owns: [curio_robot/critic/cli.py, curio_robot/sim/cli.py, tests/test_t4_cli.py]
