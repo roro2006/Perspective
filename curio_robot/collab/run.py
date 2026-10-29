@@ -24,7 +24,7 @@ from curio_robot.perception import SegmentationDetector
 from curio_robot.runtime import Runtime, RuntimeConfig
 from curio_robot.sim.live import ReactiveVoice
 from curio_robot.sim.users import SimUser
-from curio_robot.sim.world import SimWorld
+from curio_robot.sim.world import SimWorld, ensure_world
 from curio_robot.types import ObjectMap
 from curio_robot.voice.scripted import PrintedVoice
 
@@ -176,34 +176,35 @@ def run_task(
     scene = fetch_scene(rng, occlude=occlude)
     truth = true_map(scene)
     goals = plan_task(truth, user, n_goals, rng, p_deictic)
-    world = world or SimWorld(320, 240)
-    world.home()
-    apply_scene(world, scene)
-    world.set_human(scene.human_eye, _position(truth, goals[0].object_id))
+    with ensure_world(world) as owned:
+        world = owned
+        world.home()
+        apply_scene(world, scene)
+        world.set_human(scene.human_eye, _position(truth, goals[0].object_id))
 
-    person = _Person(goals, user, truth, rng)
-    on_say = None if quiet else (lambda text: print(f"  human: {text}"))
-    voice_in = ReactiveVoice(goals[0].text, person.react, on_say=on_say)
-    mark_tts: list = []  # filled once the Runtime (and its tracer) exists, as in sim.live
-    with tempfile.TemporaryDirectory() as tmp:
-        rt = Runtime(
-            world,
-            SegmentationDetector(world.block_colors),
-            voice_in=voice_in,
-            voice_out=PrintedVoice(on_start=lambda _: mark_tts and mark_tts[0](), quiet=quiet),
-            config=RuntimeConfig(
-                use_human_view=condition != "view-off",
-                person=user.name,
-                profiles_dir=profiles_dir or Path(tmp),
-                grounder=VllmGrounder(grounder_url) if grounder_url else None,
-                implicit_feedback=condition == "view-on+gaze",
-            ),
-        )
-        person.rt = rt
-        mark_tts.append(lambda: rt.tracer.mark(rt.brain.utterance, "tts_start"))
-        t_start, t_end = _drive(rt, person, voice_in, world, scene.human_eye,
-                                deadline_s=GOAL_TIMEOUT_S * (n_goals + 1))
-    return _session(person, rt, user, condition, scene.kind, seed, t_start, t_end)
+        person = _Person(goals, user, truth, rng)
+        on_say = None if quiet else (lambda text: print(f"  human: {text}"))
+        voice_in = ReactiveVoice(goals[0].text, person.react, on_say=on_say)
+        mark_tts: list = []  # filled once the Runtime (and its tracer) exists, as in sim.live
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = Runtime(
+                world,
+                SegmentationDetector(world.block_colors),
+                voice_in=voice_in,
+                voice_out=PrintedVoice(on_start=lambda _: mark_tts and mark_tts[0](), quiet=quiet),
+                config=RuntimeConfig(
+                    use_human_view=condition != "view-off",
+                    person=user.name,
+                    profiles_dir=profiles_dir or Path(tmp),
+                    grounder=VllmGrounder(grounder_url) if grounder_url else None,
+                    implicit_feedback=condition == "view-on+gaze",
+                ),
+            )
+            person.rt = rt
+            mark_tts.append(lambda: rt.tracer.mark(rt.brain.utterance, "tts_start"))
+            t_start, t_end = _drive(rt, person, voice_in, world, scene.human_eye,
+                                    deadline_s=GOAL_TIMEOUT_S * (n_goals + 1))
+        return _session(person, rt, user, condition, scene.kind, seed, t_start, t_end)
 
 
 def _drive(rt: Runtime, person: _Person, voice_in: ReactiveVoice, world: SimWorld,

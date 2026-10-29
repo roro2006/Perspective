@@ -14,7 +14,8 @@ OWN = SimUser("own", p_own_frame=1.0)
 
 @pytest.fixture(scope="module")
 def world() -> SimWorld:
-    return SimWorld(320, 240)
+    with SimWorld(320, 240) as w:
+        yield w
 
 
 def test_view_on_task_is_recorded(world):

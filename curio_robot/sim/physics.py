@@ -14,6 +14,8 @@ so101.xml default so a squeezed block doesn't sink into the fingers."""
 
 from __future__ import annotations
 
+from typing import Self
+
 import mujoco
 import numpy as np
 
@@ -238,6 +240,12 @@ class PhysWorld:
     def body_names(self) -> tuple[str, ...]:
         """Bodies added around the arm (not part of the SO-101)."""
         return (*(f"block_{i}" for i in range(N_BLOCKS)), "occluder", "human_head")
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     def close(self) -> None:
         if self._renderer is not None:

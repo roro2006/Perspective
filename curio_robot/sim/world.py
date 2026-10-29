@@ -7,8 +7,11 @@ solved part, and this sim exists to test perception and perspective."""
 from __future__ import annotations
 
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 import mujoco
 import numpy as np
@@ -224,6 +227,29 @@ class SimWorld:
         mujoco.mj_forward(self.model, self.data)
         return bool(np.linalg.norm(goal - self.data.site_xpos[site]) < 0.015)
 
+    def close(self) -> None:
+        """Free the renderer's GL context now. Left to the garbage collector it can
+        be freed in the middle of another thread's render."""
+        if self.renderer is not None:
+            self.renderer.close()
+            self.renderer = None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     def home(self) -> None:
         self.data.qpos[: len(HOME_QPOS)] = HOME_QPOS
         mujoco.mj_forward(self.model, self.data)
+
+
+@contextmanager
+def ensure_world(world: SimWorld | None, width: int = 320, height: int = 240) -> Iterator[SimWorld]:
+    """The caller's world, or a new one that is closed when the block ends."""
+    if world is not None:
+        yield world
+        return
+    with SimWorld(width, height) as owned:
+        yield owned

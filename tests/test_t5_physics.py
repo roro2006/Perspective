@@ -18,8 +18,9 @@ GATE = 0.90
 
 
 @pytest.fixture(scope="module")
-def world() -> PhysWorld:
-    return PhysWorld(64, 48)
+def world():
+    with PhysWorld(64, 48) as w:
+        yield w
 
 
 def test_blocks_settle_on_the_table(world):

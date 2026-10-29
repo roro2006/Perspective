@@ -5,8 +5,8 @@ from curio_robot.sim.world import SimWorld
 
 
 def test_arm_reaches_a_workspace_point():
-    world = SimWorld(64, 48)
-    assert world.move_gripper_to(np.array([0.25, 0.05, 0.0125]))
+    with SimWorld(64, 48) as world:
+        assert world.move_gripper_to(np.array([0.25, 0.05, 0.0125]))
 
 
 def test_ab_smoke():

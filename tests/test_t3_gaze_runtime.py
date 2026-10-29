@@ -65,19 +65,20 @@ def test_look_at_the_goal_or_with_the_arm_idle_changes_nothing():
 
 
 def test_off_by_default():
-    world = SimWorld(64, 48)
-    rt = Runtime(world, SegmentationDetector(world.block_colors), config=RuntimeConfig())
-    assert rt._gaze is None
-    on = Runtime(world, SegmentationDetector(world.block_colors),
-                 config=RuntimeConfig(implicit_feedback=True))
-    assert on._gaze is not None
+    with SimWorld(64, 48) as world:
+        rt = Runtime(world, SegmentationDetector(world.block_colors), config=RuntimeConfig())
+        assert rt._gaze is None
+        on = Runtime(world, SegmentationDetector(world.block_colors),
+                     config=RuntimeConfig(implicit_feedback=True))
+        assert on._gaze is not None
 
 
 def test_live_task_with_gaze_needs_no_spoken_correction():
     # A robot-frame person: with the view on, the first "left" goes to their side
     # (seed 3 has a pair goal), and only gaze can fix it before they speak.
     robot_frame = SimUser("robot-frame", p_own_frame=0.0)
-    s = run_task(robot_frame, "view-on+gaze", 3, world=SimWorld(320, 240))
+    with SimWorld(320, 240) as world:
+        s = run_task(robot_frame, "view-on+gaze", 3, world=world)
     assert any("gaze_redirected" in st.marks for st in s.steps)
     assert not any(st.kind == "correction" for st in s.steps)
     assert s.done == s.goals

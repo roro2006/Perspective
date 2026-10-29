@@ -6,8 +6,6 @@ Agents working a task run with --strict-impl to see the real failures:
 
 from __future__ import annotations
 
-import gc
-
 import pytest
 from scene import HUMAN, ROBOT, obj
 
@@ -51,10 +49,3 @@ def pair_map() -> ObjectMap:
 def robot_only_map(pair_map) -> ObjectMap:
     return ObjectMap(pair_map.objects, ROBOT, None)
 
-
-@pytest.fixture(autouse=True)
-def _collect_garbage_first():
-    """SimWorld and PhysWorld open MuJoCo renderers (GL contexts) and never
-    close them; if garbage collection frees one in the middle of a threaded
-    live test, that test breaks. Collect before each test so it happens here."""
-    gc.collect()

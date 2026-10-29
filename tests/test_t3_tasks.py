@@ -83,9 +83,9 @@ def test_true_map():
 
 def test_apply_scene():
     s = fetch_scene(np.random.default_rng(4), occlude=True)
-    world = SimWorld(64, 48)
-    apply_scene(world, s)
-    placed = world.block_positions()
+    with SimWorld(64, 48) as world:
+        apply_scene(world, s)
+        placed = world.block_positions()
     assert sorted(c for c, _ in placed) == sorted(b.color for b in s.blocks)
     for b in s.blocks:
         assert any(c == b.color and np.allclose(p[:2], b.xy, atol=1e-6) for c, p in placed)

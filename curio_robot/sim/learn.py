@@ -29,7 +29,7 @@ from curio_robot.sim.scenarios import (
     perspective,
 )
 from curio_robot.sim.users import SimUser, Utterance
-from curio_robot.sim.world import ROBOT_CAM_LOOK, ROBOT_CAM_POS, SimWorld
+from curio_robot.sim.world import ROBOT_CAM_LOOK, ROBOT_CAM_POS, SimWorld, ensure_world
 from curio_robot.types import CameraPose, ObjectMap, WorldObject
 from curio_robot.voice.scripted import PrintedVoice
 
@@ -209,22 +209,23 @@ def live_learning(
     "p_own_frame": [after each request], "waterfall_ms": [per request],
     "final_p_own_frame"}."""
     rng = np.random.default_rng(seed)
-    world = world or SimWorld(320, 240)
-    rows = []
-    with tempfile.TemporaryDirectory() as tmp:
-        profiles = profiles_dir or Path(tmp)
-        for i in range(requests):
-            if not quiet:
-                print(f"request {i + 1}/{requests}")
-            rows.append(_live_request(user, rng, world, profiles, quiet))
-    return {
-        "user": user.name,
-        "requests": requests,
-        "outcomes": [r["outcome"] for r in rows],
-        "p_own_frame": [r["p_own_frame"] for r in rows],
-        "waterfall_ms": [r["waterfall_ms"] for r in rows],
-        "final_p_own_frame": rows[-1]["p_own_frame"] if rows else ConventionBelief().p_own_frame(),
-    }
+    with ensure_world(world) as owned:
+        world = owned
+        rows = []
+        with tempfile.TemporaryDirectory() as tmp:
+            profiles = profiles_dir or Path(tmp)
+            for i in range(requests):
+                if not quiet:
+                    print(f"request {i + 1}/{requests}")
+                rows.append(_live_request(user, rng, world, profiles, quiet))
+        return {
+            "user": user.name,
+            "requests": requests,
+            "outcomes": [r["outcome"] for r in rows],
+            "p_own_frame": [r["p_own_frame"] for r in rows],
+            "waterfall_ms": [r["waterfall_ms"] for r in rows],
+            "final_p_own_frame": rows[-1]["p_own_frame"] if rows else ConventionBelief().p_own_frame(),
+        }
 
 
 def _live_request(

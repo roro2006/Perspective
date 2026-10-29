@@ -17,7 +17,8 @@ from curio_robot.grounding.prompt import build_request
 def world():
     from curio_robot.sim.world import SimWorld
 
-    return SimWorld(320, 240)
+    with SimWorld(320, 240) as w:
+        yield w
 
 
 @pytest.fixture(scope="module")

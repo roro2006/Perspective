@@ -208,47 +208,47 @@ def write_dataset(out_dir: Path, n: int, seed: int = 0, kinds: tuple[str, ...] =
     images_dir = out_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    world = SimWorld(320, 240)
-    rng = np.random.default_rng(seed)
+    with SimWorld(320, 240) as world:
+        rng = np.random.default_rng(seed)
 
-    examples: list[GroundingExample] = []
+        examples: list[GroundingExample] = []
 
-    for i in range(n):
-        kind = kinds[i % len(kinds)]
-        example_id = f"{seed}-{i:05d}"
+        for i in range(n):
+            kind = kinds[i % len(kinds)]
+            example_id = f"{seed}-{i:05d}"
 
-        for _ in range(MAX_ATTEMPTS):
-            ex = make_example(world, rng, kind, example_id)
-            if ex is not None:
-                examples.append(ex)
-                break
-        else:
-            raise RuntimeError(f"could not make {kind} example")
+            for _ in range(MAX_ATTEMPTS):
+                ex = make_example(world, rng, kind, example_id)
+                if ex is not None:
+                    examples.append(ex)
+                    break
+            else:
+                raise RuntimeError(f"could not make {kind} example")
 
-        Image.fromarray(ex.image).save(images_dir / f"{example_id}.png")
+            Image.fromarray(ex.image).save(images_dir / f"{example_id}.png")
 
-    data_path = out_dir / "data.jsonl"
-    with data_path.open("w") as f:
-        for ex in examples:
-            # Deep copy so the stored request keeps its data URL; the JSONL gets the path.
-            messages = copy.deepcopy(ex.request.messages)
-            messages[0]["content"][0]["image_url"]["url"] = f"images/{ex.id}.png"
-            messages.append({"role": "assistant", "content": ex.answer})
+        data_path = out_dir / "data.jsonl"
+        with data_path.open("w") as f:
+            for ex in examples:
+                # Deep copy so the stored request keeps its data URL; the JSONL gets the path.
+                messages = copy.deepcopy(ex.request.messages)
+                messages[0]["content"][0]["image_url"]["url"] = f"images/{ex.id}.png"
+                messages.append({"role": "assistant", "content": ex.answer})
 
-            row = {
-                "id": ex.id,
-                "kind": ex.kind,
-                "text": ex.text,
-                "answer": ex.answer,
-                "target_id": ex.target_id,
-                "letters": ex.request.letters,
-                "prompt_version": ex.request.prompt_version,
-                "image": f"images/{ex.id}.png",
-                "messages": messages,
-            }
-            f.write(json.dumps(row) + "\n")
+                row = {
+                    "id": ex.id,
+                    "kind": ex.kind,
+                    "text": ex.text,
+                    "answer": ex.answer,
+                    "target_id": ex.target_id,
+                    "letters": ex.request.letters,
+                    "prompt_version": ex.request.prompt_version,
+                    "image": f"images/{ex.id}.png",
+                    "messages": messages,
+                }
+                f.write(json.dumps(row) + "\n")
 
-    return data_path
+        return data_path
 
 
 def load_dataset(path: Path) -> list[dict]:

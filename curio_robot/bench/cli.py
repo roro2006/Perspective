@@ -32,7 +32,8 @@ def run(args: argparse.Namespace) -> None:
     if args.bench_cmd == "gen":
         from curio_robot.sim.world import SimWorld
 
-        items = bench_items.generate(SimWorld(320, 240), args.n_per_kind, args.seed)
+        with SimWorld(320, 240) as world:
+            items = bench_items.generate(world, args.n_per_kind, args.seed)
         path = bench_items.save(items, args.out)
         print(f"{len(items)} items -> {path}")
         return

@@ -22,7 +22,7 @@ from curio_robot.resolver import resolve
 from curio_robot.runtime import Runtime, RuntimeConfig
 from curio_robot.sim.ab import SUCCESS_RADIUS
 from curio_robot.sim.scenarios import SCENARIOS
-from curio_robot.sim.world import SimWorld
+from curio_robot.sim.world import SimWorld, ensure_world
 from curio_robot.types import ObjectMap
 from curio_robot.vlm import ChatEndpoint, VlmAnswer, VlmResolver
 from curio_robot.voice.scripted import PrintedVoice, ScriptedVoice
@@ -126,43 +126,44 @@ def run_live(
     decisions_path: Path | None = None,
     grounder_url: str | None = None,
 ) -> dict:
-    world = world or SimWorld(320, 240)
-    world.home()
-    sc = SCENARIOS[scenario](world, np.random.default_rng(seed))
-    if llm_url:
-        vlm = VlmResolver([ChatEndpoint("local", llm_url)])
-    else:
-        vlm = MockVlm(vlm_latency)
-    mark_tts: list = []
-    voice_out = PrintedVoice(on_start=lambda _: mark_tts and mark_tts[0](), quiet=quiet)
-    rt = Runtime(
-        world,
-        SegmentationDetector(world.block_colors),
-        voice_in=ScriptedVoice([(say_after, sc.request)]),
-        voice_out=voice_out,
-        vlm=vlm,
-        config=RuntimeConfig(use_human_view=use_human_view, person=person,
-                             profiles_dir=profiles_dir, decisions_path=decisions_path,
-                             grounder=VllmGrounder(grounder_url) if grounder_url else None),
-    )
-    mark_tts.append(lambda: rt.tracer.mark(rt.brain.utterance, "tts_start"))
-    if not quiet:
-        print(f"  human: {sc.request}")
-    rt.start()
-    try:
-        rt.run(timeout, until=rt.brain.done.is_set)
-        rt.run(0.2)  # let the last events land
-    finally:
-        rt.close()
-    error = float(np.linalg.norm(world.gripper_position()[:2] - sc.expected_xy))
-    return {
-        "scenario": scenario,
-        "seed": seed,
-        "request": sc.request,
-        "curio": "on" if use_human_view else "off",
-        "success": error < SUCCESS_RADIUS,
-        "error_m": round(error, 4),
-        "waterfall_ms": rt.tracer.waterfall(1),
-        "frame_ms": rt.tracer.frame_stats(),
-        "said": voice_out.lines,
-    }
+    with ensure_world(world) as owned:
+        world = owned
+        world.home()
+        sc = SCENARIOS[scenario](world, np.random.default_rng(seed))
+        if llm_url:
+            vlm = VlmResolver([ChatEndpoint("local", llm_url)])
+        else:
+            vlm = MockVlm(vlm_latency)
+        mark_tts: list = []
+        voice_out = PrintedVoice(on_start=lambda _: mark_tts and mark_tts[0](), quiet=quiet)
+        rt = Runtime(
+            world,
+            SegmentationDetector(world.block_colors),
+            voice_in=ScriptedVoice([(say_after, sc.request)]),
+            voice_out=voice_out,
+            vlm=vlm,
+            config=RuntimeConfig(use_human_view=use_human_view, person=person,
+                                 profiles_dir=profiles_dir, decisions_path=decisions_path,
+                                 grounder=VllmGrounder(grounder_url) if grounder_url else None),
+        )
+        mark_tts.append(lambda: rt.tracer.mark(rt.brain.utterance, "tts_start"))
+        if not quiet:
+            print(f"  human: {sc.request}")
+        rt.start()
+        try:
+            rt.run(timeout, until=rt.brain.done.is_set)
+            rt.run(0.2)  # let the last events land
+        finally:
+            rt.close()
+        error = float(np.linalg.norm(world.gripper_position()[:2] - sc.expected_xy))
+        return {
+            "scenario": scenario,
+            "seed": seed,
+            "request": sc.request,
+            "curio": "on" if use_human_view else "off",
+            "success": error < SUCCESS_RADIUS,
+            "error_m": round(error, 4),
+            "waterfall_ms": rt.tracer.waterfall(1),
+            "frame_ms": rt.tracer.frame_stats(),
+            "said": voice_out.lines,
+        }

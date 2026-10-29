@@ -16,7 +16,8 @@ from curio_robot.types import HUMAN_CAM, ObjectMap, WorldObject
 
 @pytest.fixture(scope="module")
 def world():
-    return SimWorld(320, 240)
+    with SimWorld(320, 240) as w:
+        yield w
 
 
 def _live_map(world) -> tuple[ObjectMap, object]:

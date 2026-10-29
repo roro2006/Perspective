@@ -141,34 +141,34 @@ def _live(args) -> None:
     from curio_robot.sim.live import run_live
     from curio_robot.sim.world import SimWorld
 
-    world = SimWorld(320, 240)
-    results = []
-    for seed in range(args.seed, args.seed + args.runs):
-        r = run_live(
-            args.scenario, seed, vlm_latency=args.vlm_latency, llm_url=args.llm_url,
-            use_human_view=not args.off, quiet=args.runs > 1, world=world,
-            grounder_url=args.grounder_url,
-        )
-        results.append(r)
-        if args.runs == 1:
-            print(json.dumps(r, indent=2))
-    if args.runs > 1:
-        def p50(stage):
-            v = [r["waterfall_ms"][stage] for r in results if stage in r["waterfall_ms"]]
-            return round(float(np.median(v)), 1) if v else None
+    with SimWorld(320, 240) as world:
+        results = []
+        for seed in range(args.seed, args.seed + args.runs):
+            r = run_live(
+                args.scenario, seed, vlm_latency=args.vlm_latency, llm_url=args.llm_url,
+                use_human_view=not args.off, quiet=args.runs > 1, world=world,
+                grounder_url=args.grounder_url,
+            )
+            results.append(r)
+            if args.runs == 1:
+                print(json.dumps(r, indent=2))
+        if args.runs > 1:
+            def p50(stage):
+                v = [r["waterfall_ms"][stage] for r in results if stage in r["waterfall_ms"]]
+                return round(float(np.median(v)), 1) if v else None
 
-        print(json.dumps({
-            "scenario": args.scenario,
-            "runs": args.runs,
-            "curio": "off" if args.off else "on",
-            "success_pct": round(100 * float(np.mean([r["success"] for r in results])), 1),
-            "p50_ms_from_speech_end": {
-                s: p50(s) for s in (
-                    "motion_start", "final_transcript", "vlm_reply", "ground_sent",
-                    "ground_reply", "arrived",
-                )
-            },
-        }, indent=2))
+            print(json.dumps({
+                "scenario": args.scenario,
+                "runs": args.runs,
+                "curio": "off" if args.off else "on",
+                "success_pct": round(100 * float(np.mean([r["success"] for r in results])), 1),
+                "p50_ms_from_speech_end": {
+                    s: p50(s) for s in (
+                        "motion_start", "final_transcript", "vlm_reply", "ground_sent",
+                        "ground_reply", "arrived",
+                    )
+                },
+            }, indent=2))
 
 
 def _learn(args) -> None:
@@ -275,32 +275,32 @@ def _collab(args) -> None:
 
     user = next(u for u in POPULATION if u.name == args.user)
     conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]
-    world = SimWorld(320, 240)
+    with SimWorld(320, 240) as world:
 
-    sessions = []
-    for condition in conditions:
-        for seed in range(args.seed, args.seed + args.tasks):
-            session = run_task(
-                user, condition, seed,
-                n_goals=args.goals,
-                p_deictic=args.deictic,
-                occlude=args.occlude,
-                world=world,
-                grounder_url=args.grounder_url,
-                quiet=True,
-            )
-            sessions.append(session)
-            print(f"{condition} seed {seed}: {len(session.done)}/{len(session.goals)} goals, "
-                  f"{len(session.steps)} turns")
+        sessions = []
+        for condition in conditions:
+            for seed in range(args.seed, args.seed + args.tasks):
+                session = run_task(
+                    user, condition, seed,
+                    n_goals=args.goals,
+                    p_deictic=args.deictic,
+                    occlude=args.occlude,
+                    world=world,
+                    grounder_url=args.grounder_url,
+                    quiet=True,
+                )
+                sessions.append(session)
+                print(f"{condition} seed {seed}: {len(session.done)}/{len(session.goals)} goals, "
+                      f"{len(session.steps)} turns")
 
-    args.out.mkdir(parents=True, exist_ok=True)
-    save_sessions(sessions, args.out / "sessions.jsonl")
+        args.out.mkdir(parents=True, exist_ok=True)
+        save_sessions(sessions, args.out / "sessions.jsonl")
 
-    summary = summarize(sessions)
-    (args.out / "summary.json").write_text(json.dumps(summary, indent=2))
+        summary = summarize(sessions)
+        (args.out / "summary.json").write_text(json.dumps(summary, indent=2))
 
-    print(format_table(summary))
+        print(format_table(summary))
 
-    if args.export:
-        counts = export_episodes(sessions, args.export, overwrite=True)
-        print(f"exported {args.export}: {counts}")
+        if args.export:
+            counts = export_episodes(sessions, args.export, overwrite=True)
+            print(f"exported {args.export}: {counts}")

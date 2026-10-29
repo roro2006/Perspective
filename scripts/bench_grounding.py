@@ -31,22 +31,22 @@ def _example(world: SimWorld, rng: np.random.Generator, kind: str, example_id: s
 def bench(grounder: VllmGrounder, n: int, seed: int, warmup: int = 2) -> dict:
     """Score n examples; the first `warmup` calls are discarded (model load, caches)."""
     rng = np.random.default_rng(seed)
-    world = SimWorld(320, 240)
-    for i in range(warmup):
-        grounder.score(_example(world, rng, KINDS[i % len(KINDS)], f"warm-{i}").request)
-    rows = []
-    for i in range(n):
-        kind = KINDS[i % len(KINDS)]
-        ex = _example(world, rng, kind, f"{seed}-{i:05d}")
-        ans = grounder.score(ex.request)
-        argmax = max(ans.probs, key=ans.probs.get) if ans.probs else None
-        rows.append({
-            "id": ex.id, "kind": kind, "answer": ex.answer, "target": ex.target_id,
-            "emitted": ans.letter, "argmax_ok": argmax == ex.target_id,
-            "emitted_ok": ans.letter == ex.answer, "latency_ms": ans.latency_ms,
-            "source": ans.source, "error": ans.error,
-        })
-    return {"rows": rows, "summary": _summary(rows)}
+    with SimWorld(320, 240) as world:
+        for i in range(warmup):
+            grounder.score(_example(world, rng, KINDS[i % len(KINDS)], f"warm-{i}").request)
+        rows = []
+        for i in range(n):
+            kind = KINDS[i % len(KINDS)]
+            ex = _example(world, rng, kind, f"{seed}-{i:05d}")
+            ans = grounder.score(ex.request)
+            argmax = max(ans.probs, key=ans.probs.get) if ans.probs else None
+            rows.append({
+                "id": ex.id, "kind": kind, "answer": ex.answer, "target": ex.target_id,
+                "emitted": ans.letter, "argmax_ok": argmax == ex.target_id,
+                "emitted_ok": ans.letter == ex.answer, "latency_ms": ans.latency_ms,
+                "source": ans.source, "error": ans.error,
+            })
+        return {"rows": rows, "summary": _summary(rows)}
 
 
 def _summary(rows: list[dict]) -> dict:
