@@ -1,7 +1,7 @@
 ---
 id: T2-10
 title: Serving bring-up and latency on the RX 7900 XT
-status: todo
+status: doing
 agent: claude
 depends: [T2-05]
 owns: [docs/bringup-7900xt.md, scripts/bench_grounding.py]

@@ -144,12 +144,46 @@ latency in PyTorch rose from 116 to 135 ms with the adapter unmerged.
 Adapter: `out/lora/qwen3vl4b-r16` (not in git; `heldout_scores.json` and
 `train_log.jsonl` next to it).
 
+## Serving the adapter in llama.cpp
+Converted with llama.cpp's own script at tag `b11512` (the commit of the
+installed server), run in the ROCm venv. Only the converter, `conversion/` and
+`gguf-py/` are needed, sparse-cloned to `C:\Users\Rohan\dev\llama\src`; nothing
+is pip-installed (the script puts `gguf-py` on its path itself):
+```powershell
+cd C:\Users\Rohan\dev\llama\src
+& $py convert_lora_to_gguf.py C:\Users\Rohan\dev\Perspective\out\lora\qwen3vl4b-r16 `
+  --base C:\Users\Rohan\dev\rocm-train\models\Qwen3-VL-4B-Instruct --outtype f16 `
+  --outfile ..\models\lora\curio-ground-r16-f16.gguf
+```
+288 tensors (36 layers x q/k/v/o x A/B), 23.6 MB; the vision tower is untouched.
+Serve by adding `--lora "$d\models\lora\curio-ground-r16-f16.gguf"` to the serve
+command above. No merge is needed: the adapter costs no measurable latency.
+
+`curio-sim ground-eval` on the same 302 held-out ids (`--ids eval_ids.json`),
+each run on a fresh server:
+
+| Kind | Base (Q8_0) | Base + LoRA | PyTorch bf16 + LoRA |
+|---|---|---|---|
+| color | 1.000 | 1.000 | 1.000 |
+| relation | 0.427 | 0.896 | 0.917 |
+| deictic | 0.188 | 0.554 | 0.604 |
+| all | 0.546 | **0.818** | 0.841 |
+| p50 / p95 ms | 105 / 119 | 108 / 125 | |
+
+Gate (`--current` the base result): **PASS**, 0.818 vs 0.546. The served model
+loses about 2 points against bf16, mostly on deictic (Q8_0 base weights).
+`bench_grounding.py --n 150 --seed 7` (fresh scenes, not the training seed)
+agrees: 0.79 with the LoRA vs 0.63 without, p50 102 vs 103 ms.
+
+Pitfall: don't compare by switching the adapter's scale on a running server
+(`POST /lora-adapters`). The prompt cache keeps keys and values computed under
+the old scale, so a "base" run after a LoRA run scores like the LoRA. Restart.
+
 ## Not done yet
 - **Contention run**: whisper-server, Kokoro and the detector aren't installed
   on this machine.
 - **Word timestamps** (`anchor.parse_words` vs whisper-server's JSON): needs
   whisper-server. `WhisperCppServer.transcribe_words` still uses guessed fields.
-- **Serving the adapter**: llama-server needs it merged and converted to GGUF
-  (or served with `--lora`), so `curio-sim ground-eval` and the live runtime
-  still use the base model.
+- **Live runtime on the adapter**: llama-server serves it (above), but the
+  runtime CLI has no `--grounder-url` flag yet (T2-11 notes).
 - **8B comparison**: not run (see above).
