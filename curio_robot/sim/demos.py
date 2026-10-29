@@ -77,6 +77,61 @@ def words_for(scene: TaskScene, i: int) -> tuple[str, str | None]:
     return f"Hand me the {target.color} one on my {side}", "speaker"
 
 
+PAIR_WORDINGS = (("my", 0.3), ("your", 0.3), ("the", 0.15), ("free", 0.25))
+FREE_TRIES = 20  # template draws before falling back to "my" wording
+
+
+def words_varied(scene: TaskScene, i: int, rng: np.random.Generator) -> tuple[str, str | None]:
+    """Like words_for, but with the wording the policy meets at run time: for a pair
+    block "my"/"your"/"the" side words or a free-wording template (bench.items), drawn
+    with PAIR_WORDINGS weights; for a unique colour, half plain and half a free lead and
+    noun. The target is always block i; the marker carries the answer, the words vary."""
+    from curio_robot.bench.items import (
+        FREE_LEADS,
+        FREE_NOUNS,
+        FREE_TEMPLATES,
+        MIN_DISTANCE_GAP,
+    )
+
+    object_map = true_map(scene)
+    target = object_map.objects[i]
+    same = object_map.by_color(target.color)
+    viewers = {"speaker": object_map.human_pose, "robot": object_map.robot_pose}
+    lead = FREE_LEADS[int(rng.integers(0, len(FREE_LEADS)))]
+    noun = FREE_NOUNS[int(rng.integers(0, len(FREE_NOUNS)))]
+    if len(same) == 1:
+        if rng.random() < 0.5:
+            return f"Hand me the {target.color} one", None
+        return f"{lead} the {target.color} {noun}", None
+
+    def side_from(frame: str) -> str:
+        left = perspective.pick(same, "left", viewers[frame])
+        return "left" if left.object_id == target.object_id else "right"
+
+    names, weights = zip(*PAIR_WORDINGS, strict=True)
+    wording = names[int(rng.choice(len(names), p=np.array(weights) / sum(weights)))]
+    if wording == "free":
+        for _ in range(FREE_TRIES):
+            relation, frame, template = FREE_TEMPLATES[int(rng.integers(0, len(FREE_TEMPLATES)))]
+            viewer = viewers[frame]
+            if relation == "side":
+                side = side_from(frame)
+            else:
+                a, b = (perspective.horizontal_distance(o, viewer) for o in same)
+                if abs(a - b) < MIN_DISTANCE_GAP:
+                    continue
+                if perspective.pick(same, relation, viewer).object_id != target.object_id:
+                    continue
+                side = ""
+            return template.format(lead=lead, color=target.color, noun=noun, side=side), frame
+        wording = "my"
+    if wording == "the":
+        frame = "speaker" if rng.random() < 0.5 else "robot"
+        return f"Hand me the {target.color} one on the {side_from(frame)}", frame
+    frame = "speaker" if wording == "my" else "robot"
+    return f"Hand me the {target.color} one on {wording} {side_from(frame)}", frame
+
+
 def target_pixel(world: PhysWorld, i: int, robot: CameraFrame) -> tuple[float, float] | None:
     """Pixel (u, v) of block i's centre in the robot image; None if outside it."""
     uv = project(world.block_position(i), robot.intrinsics, robot.pose)
@@ -197,6 +252,7 @@ def record(
     height: int = 240,
     include_failed: bool = False,
     overwrite: bool = False,
+    words: str = "fixed",
 ) -> dict:
     """Record n_episodes expert picks into out_dir.
 
@@ -220,15 +276,18 @@ def record(
             if not success and not include_failed:
                 continue
             index = len(episodes)
-            words, frame = words_for(scene, i)
-            _write_episode(out_dir, index, words, frames, actions)
+            if words == "varied":  # its own generator, so scenes match a "fixed" recording
+                text, frame = words_varied(scene, i, np.random.default_rng([episode_seed, 7]))
+            else:
+                text, frame = words_for(scene, i)
+            _write_episode(out_dir, index, text, frames, actions)
             total_frames += len(frames)
             episodes.append({
                 "episode_index": index,
                 "seed": episode_seed,
                 "target_index": i,
                 "target_id": true_map(scene).objects[i].object_id,
-                "words": words,
+                "words": text,
                 "frame": frame,
                 "target_pixel": None if frames[0].target_pixel is None
                 else list(frames[0].target_pixel),

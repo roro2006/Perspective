@@ -123,3 +123,20 @@ def test_marker_uv_modes():
     assert set(MARKER_MODES) == {"start", "track"}
     with pytest.raises(ValueError):
         marker_uv(episode, frame, "none")
+
+
+def test_varied_words_keep_the_target_and_vary_the_wording():
+    import numpy as np
+
+    from curio_robot.collab.tasks import fetch_scene
+    from curio_robot.sim.demos import words_varied
+
+    texts = set()
+    for seed in range(40):
+        scene = fetch_scene(np.random.default_rng(seed))
+        for i in range(len(scene.blocks)):
+            text, frame = words_varied(scene, i, np.random.default_rng([seed, i]))
+            assert scene.blocks[i].color in text
+            assert (frame is None) == (i == 4)  # block 4 is the unique colour
+            texts.add(text.split(" the ")[0] + ("|your" if " your " in text else ""))
+    assert {"Hand me", "Hand me|your"} <= texts and len(texts) >= 4

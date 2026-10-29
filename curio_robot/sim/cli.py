@@ -98,6 +98,8 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--out", type=Path, default=Path("out/demos"))
     d.add_argument("--size", default="320x240", help="image size, e.g. 320x240")
     d.add_argument("--include-failed", action="store_true")
+    d.add_argument("--words", choices=("fixed", "varied"), default="fixed",
+                   help="varied: my/your/the side words and free wording, as at run time")
     d.add_argument("--overwrite", action="store_true")
 
     critic_cli.add_parser(sub)
@@ -126,7 +128,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "demos":
         width, height = (int(v) for v in args.size.split("x"))
         print(json.dumps(demos.record(args.n, args.seed, args.out, width, height,
-                                      args.include_failed, args.overwrite)))
+                                      args.include_failed, args.overwrite, args.words)))
     else:
         result = ab.run(args.trials, args.seed, args.pose_noise, args.rot_noise)
         ab.save(result, args.out)
