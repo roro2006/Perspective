@@ -1,7 +1,7 @@
 ---
 id: T4-03
 title: Critic features
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/critic/features.py]

@@ -1,7 +1,7 @@
 ---
 id: T4-01
 title: Simulated reactions to a reach
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/critic/reactions.py]
