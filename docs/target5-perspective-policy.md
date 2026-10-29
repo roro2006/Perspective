@@ -6,17 +6,53 @@ the two halves and the benchmark that joins them. Cards: `tasks/T5-xx`.
 
 ## 1. The benchmark (phase 1)
 Simulated scenes with the person's view and the robot's view rendered together,
-exact answers, and four request kinds (`curio_robot/bench/items.py`):
+exact answers, and six request kinds (`curio_robot/bench/items.py`):
 
 | kind | scene | words | what it tests |
 |---|---|---|---|
 | color | cluttered | "Hand me the blue one" (unique colour) | baseline grounding |
 | marked | same-colour pair | "... on my left" / "... on your left" | the frame named in the words |
 | habit | same-colour pair | "... on the left", with the person's habit | the frame from what we learned |
-| hidden | box hides the target from the robot | colour, plus side if needed | objects only the person sees |
+| hidden | box hides the target (a unique colour) from the robot | "Hand me the blue one" | objects only the person sees |
+| hidden-pair | box hides one block of a pair from the robot; its partner stays visible | "... on my left" / "... on your left" | hidden objects where the frame still matters |
+| free | same-colour pair | templated free wording (below) | wording a keyword rule cannot parse |
+
+"hidden-pair" and "free" were added by T5-10 at the end of the kind list, so
+the first four kinds' items are byte-identical to the original benchmark for
+the same seed (`out/bench5` = the first 200 items of `out/bench5b`).
+
+**hidden-pair**: the box is placed as for "hidden" (0.045 m from the target
+toward the robot camera), but in front of a random pair block; draws are
+rejected when the box overlaps a block, the target still shows >= 20 robot
+pixels, the partner does not, or both frames pick the same block. Words are
+always marked ("my"/"your"), so robot-only sees only the wrong block and
+the answer needs both the person view and the right frame.
+
+**free**: `"{lead} the {colour} {noun} {relation}"`, lead from "Hand me",
+"Pass me", "Could you get me", "Grab"; noun from "one", "block", "cube",
+"thing"; 22 relation templates (`items.FREE_TEMPLATES`):
+- side, speaker: "to my left", "on my left-hand side", "the left red one from
+  where I sit", "on the left as I see it";
+- side, robot: "to your left", "on your left-hand side", "the left red one
+  from where you are", "on the left as you see it";
+- distance (`perspective.pick` nearest/farthest from the speaker's or the
+  robot's camera): "closest to me/you", "nearest me/you", "nearer to me/you",
+  "at my/your end of the table", "farthest from me/you", "further away from
+  me/you", "on the far side from me/you".
+
+Distance items need the pair >= 0.02 m apart in distance; every free item is
+rejected unless the two frames give different blocks. No gaze or "that one".
+On seed 0 the no-VLM rule scores 0.30 on free (no answer on the 27 distance
+items, 15 of 23 side items right: it reads " my "/" your " and otherwise
+assumes the speaker).
 
 Each item stores the target block, whose frame the words meant, the target's
 table position and its pixel in the robot camera (what a policy is told).
+
+Rule scores (no VLM) on `out/bench5b` (50 per kind, seed 0): color 1.00,
+marked 1.00, habit 0.76, hidden 1.00, hidden-pair 1.00, free 0.30, overall
+0.84. The rule reads the exact map (it knows hidden blocks' positions), so
+on hidden-pair it is an upper bound, not a competitor to robot-only.
 
 ## 2. Three ways to ground (phase 2)
 `curio_robot/bench/conditions.py` turns an item into a VLM request:
