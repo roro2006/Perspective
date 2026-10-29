@@ -44,6 +44,11 @@ class Tracer:
         with self._lock:
             return stage in self._marks.get(utterance, {})
 
+    def marks(self, utterance: int) -> dict[str, float]:
+        """Every stage of one utterance, absolute perf_counter seconds (target 3 sessions)."""
+        with self._lock:
+            return dict(self._marks.get(utterance, {}))
+
     def waterfall(self, utterance: int) -> dict[str, float]:
         with self._lock:
             marks = dict(self._marks.get(utterance, {}))

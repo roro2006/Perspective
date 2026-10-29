@@ -38,6 +38,19 @@ Design: [`docs/target2-grounding.md`](../docs/target2-grounding.md).
 T2-10 and the real training run happen on the 7900 XT; while Qwen agents use
 that GPU, nothing else can, so schedule bring-up and agent waves apart.
 
+## Target 3 waves
+Design: [`docs/target3-collaboration.md`](../docs/target3-collaboration.md).
+Measure working together (fluency over multi-step tasks), add implicit
+feedback from where the person looks, and export sessions as a dataset.
+
+| Wave | Cards (parallel within a wave) | Agent |
+|---|---|---|
+| 0 | T3-00 contracts, tests, board | done |
+| 1 | T3-01 session · T3-02 metrics · T3-03 worker · T3-04 task scene · T3-05 gaze · T3-08 export | Qwen ×6, two at a time |
+| 2 | T3-06 task runner (needs 01, 03, 04) · T3-10 pilot protocol (needs 02) | Claude · Claude |
+| 3 | T3-07 gaze in the runtime (needs 05, 06) · T3-09 scoreboard CLI (needs 02, 06, 08) | Claude · any |
+| 4 | T3-11 results write-up (needs 07, 09) | Claude |
+
 ## Card lifecycle
 `todo` → `doing` → `review` → `done` (or `blocked`, with a reason in the notes).
 Only the coordinator changes `status`, on `main`. An agent's branch never
