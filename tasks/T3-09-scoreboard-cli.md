@@ -1,7 +1,7 @@
 ---
 id: T3-09
 title: curio-sim collab, run tasks and print the scoreboard
-status: todo
+status: doing
 agent: any
 depends: [T3-02, T3-06, T3-08]
 owns: [curio_robot/collab/report.py, curio_robot/sim/cli.py, tests/test_t3_report.py]

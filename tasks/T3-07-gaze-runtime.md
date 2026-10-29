@@ -1,7 +1,7 @@
 ---
 id: T3-07
 title: Implicit feedback from where the person looks
-status: todo
+status: doing
 agent: claude
 depends: [T3-05, T3-06]
 owns: [curio_robot/runtime/orchestrator.py, curio_robot/runtime/__init__.py, curio_robot/runtime/perception_stage.py, curio_robot/collab/run.py, tests/test_t3_gaze_runtime.py]
