@@ -8,6 +8,7 @@
     uv run curio-sim learn --live --user robot-frame --requests 6
     uv run curio-sim collab --tasks 5 --conditions view-off,view-on --user mixed --export out/dataset
     uv run curio-sim critic phase1 --out out/critic
+    uv run curio-sim bench gen --n-per-kind 50 --out out/bench5
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from curio_robot.bench import cli as bench_cli
 from curio_robot.critic import cli as critic_cli
 from curio_robot.grounding.client import DEFAULT_URL, VllmGrounder
 from curio_robot.sim import ab
@@ -90,6 +92,7 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--export", type=Path, default=None, help="write the dataset here")
 
     critic_cli.add_parser(sub)
+    bench_cli.add_parser(sub)
 
     args = parser.parse_args(argv)
     if args.cmd == "shot":
@@ -109,6 +112,8 @@ def main(argv: list[str] | None = None) -> None:
         _collab(args)
     elif args.cmd == "critic":
         critic_cli.run(args)
+    elif args.cmd == "bench":
+        bench_cli.run(args)
     else:
         result = ab.run(args.trials, args.seed, args.pose_noise, args.rot_noise)
         ab.save(result, args.out)
