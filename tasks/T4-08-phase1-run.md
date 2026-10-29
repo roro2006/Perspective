@@ -1,7 +1,7 @@
 ---
 id: T4-08
 title: Phase 1 run, the gate, and the write-up
-status: todo
+status: done
 agent: claude
 depends: [T4-07]
 owns: [product/results.md]

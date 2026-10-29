@@ -144,3 +144,65 @@ Limits:
   occlusion badly in Phase 0) isn't applied here, so gaze is at its best case.
 - No "that one" requests and no grounder in this run (the GPU was serving the
   coding model). 10 tasks per cell, means only, no intervals.
+
+## Reaction critic (target 4, phase 1)
+
+Simulated reactions only, written by us (`docs/target4-critic.md`, section 3);
+this tests the plumbing and the ceiling, not real people. Run 2026-10-29:
+
+    uv run curio-sim critic phase1 --out out/critic
+
+Train 4000 episodes (seed 0; attentive, slow, distracted), pick the threshold
+for 90% precision on 1000 (seed 1), test on 2000 (seed 2; all four families,
+silent held out). Half the reaches go to the wrong block of a same-coloured
+pair. 12 s on the CPU.
+
+| metric | learned critic | gaze rule (target 3) | gate |
+|---|---|---|---|
+| precision | 0.91 | 0.84 | >= 0.90 |
+| recall | 0.96 | 0.97 | >= 0.70 |
+| false alarms on right reaches | 0.09 | 0.18 | |
+| lead_s (median, before "no" starts) | -0.14 | -0.21 | >= 0.4 |
+| names the wanted block | 1.00 | 1.00 | >= 0.85 |
+| AUROC | 0.98 | 0.90 | |
+
+**Gate: fail, on lead time.** The critic is a better detector than the rule
+(half the false alarms, AUROC 0.98 against 0.90, and it still finds 86% of
+wrong reaches for silent people it never trained on), but at 90% precision it
+mostly fires on the spoken "no" (the transcript arrives 0.2 s after speech
+starts), not before it.
+
+Lead time against precision on the test set:
+
+| threshold | precision | recall | lead_s |
+|---|---|---|---|
+| 0.60 | 0.74 | 0.97 | 0.31 |
+| 0.70 | 0.83 | 0.97 | 0.19 |
+| 0.81 | 0.91 | 0.96 | -0.14 |
+| 0.90 | 0.98 | 0.94 | -0.23 |
+
+Why:
+- **The two candidates are close together from the person.** Seen from the
+  person, the two blocks of a pair are a median 8.6 deg apart (10th-90th
+  percentile 6.1-11.7), inside one 10 deg gaze cone and the same scale as head
+  noise (1-6 deg). A head turning to the wanted block looks a lot like a head
+  following the gripper to the other one.
+- **Eye-tracker accuracy alone does not fix it.** Rerunning with head noise
+  cut to 1.0-1.5 deg (about Aria eye tracking) gives precision 0.92 and lead
+  0.04 s: better than with head direction, still short of 0.4 s.
+- **Our reaction model leaves little room.** People start looking at the wanted
+  block 0.1-0.5 s after noticing and start saying "no" 0.4-1.5 s after; with a
+  0.15 s head lag the gaze signal leads speech by roughly 0.2-0.5 s at best, so
+  0.4 s at 90% precision was close to the ceiling we built in.
+
+What would change it:
+- Real reaction timing (phase 3). If people look earlier, relative to speaking,
+  than we assumed, the lead grows; if not, the gate is unreachable for this task.
+- Act at a lower precision with a cheap action: at 0.74 precision the critic
+  leads by 0.31 s, enough to slow the arm and ask, not to stop it.
+- Features finer than a 10 deg cone (angle to each block relative to the
+  gripper direction), and scenes where candidates are further apart.
+
+The critic as a **training signal** (phase 2) does not need a lead: it needs
+the wanted block named correctly (1.00 here) and few false alarms, both of
+which it meets in simulation.
