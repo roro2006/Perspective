@@ -1,7 +1,7 @@
 ---
 id: T5-03
 title: Benchmark scoring and curio-sim bench
-status: todo
+status: done
 agent: any
 depends: [T5-02]
 owns: [curio_robot/bench/score.py, curio_robot/bench/cli.py, curio_robot/sim/cli.py]
