@@ -28,7 +28,8 @@ def e2e():
 @pytest.fixture(scope="module")
 def grounded(e2e, tmp_path_factory):
     out = tmp_path_factory.mktemp("e2e")
-    result = e2e.ground(out, "base", e2e.FirstLetterGrounder(), n=8, seed=70000)
+    result = e2e.ground(out, "base", e2e.FirstLetterGrounder(), n=2 * len(e2e.KINDS),
+                       seed=70000)
     return out, result
 
 
@@ -36,9 +37,9 @@ def test_ground_writes_trials_and_every_setup(e2e, grounded):
     out, result = grounded
     trials = e2e.read_jsonl(out / "trials.jsonl")
     assert [t["kind"] for t in trials] == list(e2e.KINDS) * 2
-    assert len({t["seed"] for t in trials}) == 8
+    assert len({t["seed"] for t in trials}) == 2 * len(e2e.KINDS)
     assert all(t["seed"] >= 70000 for t in trials)
-    assert result["n"] == 8 and result["errors"] == 0
+    assert result["n"] == 2 * len(e2e.KINDS) and result["errors"] == 0
     choices = e2e.load_choices(out, None)
     assert list(choices) == ["words", "base", "oracle"]
     for t in trials:
@@ -61,11 +62,21 @@ def test_trials_match_their_words_and_need_the_frame(e2e, grounded):
         if t["kind"] == "color":
             assert t["partner"] is None and len(omap.by_color(target.color)) == 1
             continue
-        side = "left" if "left" in t["words"] else "right"
         viewer = omap.human_pose if t["frame"] == "speaker" else omap.robot_pose
-        cands = omap.by_color(target.color)
-        assert perspective.pick(cands, side, viewer).object_id == target.object_id
         other = omap.robot_pose if t["frame"] == "speaker" else omap.human_pose
+        cands = omap.by_color(target.color)
+        words = t["words"]
+        if t["kind"] == "free" and "left" not in words and "right" not in words:
+            near = any(w in words for w in ("closest", "nearest", "nearer", "end of the table"))
+            relation = "nearest" if near else "farthest"
+            assert perspective.pick(cands, relation, viewer).object_id == target.object_id
+            assert perspective.pick(cands, relation, other).object_id != target.object_id
+            continue
+        side = "left" if "left" in words else "right"
+        assert perspective.pick(cands, side, viewer).object_id == target.object_id
+        if t["kind"] == "free":
+            assert perspective.pick(cands, side, other).object_id != target.object_id
+            continue
         assert perspective.pick(cands, side, other).object_id == t["object_ids"][t["partner"]]
         assert ({"my": " my ", "your": " your ", "habit": " the "}[t["kind"]]) in t["words"]
         assert (t["p_own_frame"] is not None) == (t["kind"] == "habit")
@@ -74,13 +85,15 @@ def test_trials_match_their_words_and_need_the_frame(e2e, grounded):
 def test_second_grounder_reuses_trials_and_rejects_others(e2e, grounded):
     out, _ = grounded
     before = (out / "trials.jsonl").read_text(encoding="utf-8")
-    e2e.ground(out, "lora", e2e.FirstLetterGrounder(), n=8, seed=70000)
+    e2e.ground(out, "lora", e2e.FirstLetterGrounder(), n=2 * len(e2e.KINDS),
+                       seed=70000)
     assert (out / "trials.jsonl").read_text(encoding="utf-8") == before
     assert list(e2e.load_choices(out, None)) == ["words", "base", "lora", "oracle"]
     with pytest.raises(SystemExit):
         e2e.ground(out, "other", e2e.FirstLetterGrounder(), n=4, seed=71000)
     with pytest.raises(ValueError):
-        e2e.ground(out, "oracle", e2e.FirstLetterGrounder(), n=8, seed=70000)
+        e2e.ground(out, "oracle", e2e.FirstLetterGrounder(), n=2 * len(e2e.KINDS),
+                       seed=70000)
 
 
 def test_scene_for_rebuilds_the_scene(e2e, grounded):

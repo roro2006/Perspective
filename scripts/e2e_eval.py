@@ -54,7 +54,11 @@ import smolvla_eval as sve  # needs the paths above; no torch at import
 from curio_robot import perspective
 from curio_robot.bench.conditions import build
 from curio_robot.bench.items import (
+    FREE_LEADS,
+    FREE_NOUNS,
+    FREE_TEMPLATES,
     HABITS,
+    MIN_DISTANCE_GAP,
     MIN_VISIBLE_PX,
     PAIR_BLOCKS,
     SINGLE_INDEX,
@@ -68,8 +72,9 @@ from curio_robot.sim.physics import PhysWorld
 from curio_robot.types import HUMAN_CAM, ROBOT_CAM, CameraFrame, Intrinsics, ObjectMap
 
 E2E_SEED = 70000  # demos 1000-1300, smolvla_eval 50000+
-KINDS = ("my", "your", "habit", "color")
-BENCH_KIND = {"my": "marked", "your": "marked", "habit": "habit", "color": "color"}
+KINDS = ("my", "your", "habit", "color", "free")
+BENCH_KIND = {"my": "marked", "your": "marked", "habit": "habit", "color": "color",
+              "free": "free"}
 SETUPS = ("words", "base", "lora", "oracle")  # table order; base/lora come from `ground`
 FIXED_SETUPS = ("words", "oracle")  # written by every `ground` run
 GROUND_SIZE = (320, 240)  # the benchmark's render size (bench gen: SimWorld(320, 240))
@@ -108,11 +113,15 @@ def _pixel(point: np.ndarray, k: Intrinsics, frame: CameraFrame) -> list[float] 
 
 
 def _words(kind: str, rng: np.random.Generator, omap: ObjectMap, target: int):
-    """(text, frame, p_own_frame), or None when the pair is not ambiguous for its side.
-    Draws from rng (habit only) after the scene and the target index, like bench items."""
+    """(text, frame, p_own_frame, target), or None when the frame would not matter.
+    Draws from rng (habit and free only) after the scene and the target index, like bench
+    items. "free" uses the benchmark's free-wording templates; for nearest/farthest the
+    target is whichever block of the pair the relation picks, so it may change."""
     obj = omap.objects[target]
     if kind == "color":
-        return f"Hand me the {obj.color} one", None, None
+        return f"Hand me the {obj.color} one", None, None, target
+    if kind == "free":
+        return _free_words(rng, omap, obj)
     p = HABITS[int(rng.integers(0, 2))] if kind == "habit" else None
     if kind == "habit":
         frame = "speaker" if rng.random() < p else "robot"
@@ -125,7 +134,32 @@ def _words(kind: str, rng: np.random.Generator, omap: ObjectMap, target: int):
     if by_human is perspective.pick(cands, side, omap.robot_pose):
         return None
     whose = {"my": "my ", "your": "your ", "habit": "the "}[kind]
-    return f"Hand me the {obj.color} one on {whose}{side}", frame, p
+    return f"Hand me the {obj.color} one on {whose}{side}", frame, p, target
+
+
+def _free_words(rng: np.random.Generator, omap: ObjectMap, obj):
+    """Free wording as bench.items draws it: template, lead, noun, then the exact answer."""
+    relation, frame, template = FREE_TEMPLATES[int(rng.integers(0, len(FREE_TEMPLATES)))]
+    lead = FREE_LEADS[int(rng.integers(0, len(FREE_LEADS)))]
+    noun = FREE_NOUNS[int(rng.integers(0, len(FREE_NOUNS)))]
+    cands = omap.by_color(obj.color)
+    viewer = omap.human_pose if frame == "speaker" else omap.robot_pose
+    other = omap.robot_pose if frame == "speaker" else omap.human_pose
+    side = ""
+    if relation == "side":
+        side = "left" if perspective.pick(cands, "left", viewer) is obj else "right"
+        if perspective.pick(cands, side, omap.human_pose) is perspective.pick(
+            cands, side, omap.robot_pose
+        ):
+            return None
+        chosen = obj
+    else:
+        chosen = perspective.pick(cands, relation, viewer)
+        a, b = (perspective.horizontal_distance(o, viewer) for o in cands)
+        if abs(a - b) < MIN_DISTANCE_GAP or perspective.pick(cands, relation, other) is chosen:
+            return None
+    text = template.format(lead=lead, color=obj.color, noun=noun, side=side)
+    return text, frame, None, omap.objects.index(chosen)
 
 
 def make_trial(world: PhysWorld, seed: int, kind: str, trial_id: str,
@@ -142,6 +176,7 @@ def make_trial(world: PhysWorld, seed: int, kind: str, trial_id: str,
     words = _words(kind, rng, omap, target)
     if words is None:
         return None
+    text, frame, p, target = words
     colour = omap.objects[target].color
     partner = next((i for i, o in enumerate(omap.objects) if o.color == colour and i != target),
                    None)
@@ -151,7 +186,6 @@ def make_trial(world: PhysWorld, seed: int, kind: str, trial_id: str,
         return None
     visible = tuple(o.object_id for i, o in enumerate(omap.objects)
                     if int((robot.segmentation == world.block_ids()[i]).sum()) >= MIN_VISIBLE_PX)
-    text, frame, p = words
     record = {
         "id": trial_id, "seed": seed, "kind": kind, "words": text, "frame": frame,
         "p_own_frame": p, "target": target, "partner": partner,
