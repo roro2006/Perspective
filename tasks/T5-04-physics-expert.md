@@ -1,7 +1,7 @@
 ---
 id: T5-04
 title: Physics world with actuated SO-101, free blocks, and a scripted pick expert
-status: todo
+status: done
 agent: claude
 depends: []
 owns: [curio_robot/sim/physics.py, curio_robot/sim/expert.py, tests/test_t5_physics.py]

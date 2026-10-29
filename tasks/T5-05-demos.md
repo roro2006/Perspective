@@ -5,7 +5,7 @@ status: todo
 agent: claude
 depends: [T5-04]
 owns: [curio_robot/sim/demos.py, tests/test_t5_demos.py]
-reads: [docs/target5-perspective-policy.md, curio_robot/collab/export.py]
+reads: [docs/target5-perspective-policy.md, curio_robot/sim/physics.py, curio_robot/sim/expert.py, curio_robot/collab/export.py, tasks/notes/T5-04.md]
 accept: uv run pytest tests/test_t5_demos.py
 ---
 
