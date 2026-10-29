@@ -108,3 +108,14 @@ Design: [`docs/target4-critic.md`](../docs/target4-critic.md).
 | 2 | T4-02 episodes (needs 01) | Qwen |
 | 3 | T4-07 `curio-sim critic` (needs 02-06) | any |
 | 4 | T4-08 phase 1 run and write-up (needs 07) | Claude |
+
+## Target 5 waves (perspective grounding and policy)
+Design: [`docs/target5-perspective-policy.md`](../docs/target5-perspective-policy.md).
+
+| Wave | Cards (parallel within a wave) | Agent |
+|---|---|---|
+| 0 | T5-00 contracts, tests, board | done |
+| 1 | T5-01 bench items, T5-04 physics world and expert | Qwen, Claude agent |
+| 2 | T5-02 conditions (needs 01), T5-05 demonstrations (needs 04) | Qwen, Claude agent |
+| 3 | T5-03 scoring and curio-sim bench (needs 02) | any |
+| 4 | T5-06 LoRA retrain and phase 2 results (needs 03; GPU after Qwen) | Claude |
