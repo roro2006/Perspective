@@ -1,7 +1,7 @@
 ---
 id: T5-01
 title: Benchmark items with paired views
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/bench/items.py]
