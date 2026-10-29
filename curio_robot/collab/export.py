@@ -33,6 +33,8 @@ def export_episodes(sessions: list[Session], out_dir: Path, overwrite: bool = Fa
     data_dir = out_dir / "data"
     meta_dir.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
+    for stale in data_dir.glob("episode_*.jsonl"):  # a smaller re-export must not keep old ones
+        stale.unlink()
 
     total_steps = sum(len(s.steps) for s in sessions)
     conditions = sorted({s.condition for s in sessions})

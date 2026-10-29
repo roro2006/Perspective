@@ -1,7 +1,7 @@
 ---
 id: T3-01
 title: Session records to and from JSON lines
-status: doing
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/collab/session.py]

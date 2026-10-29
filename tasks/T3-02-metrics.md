@@ -1,7 +1,7 @@
 ---
 id: T3-02
 title: Fluency metrics for one task
-status: doing
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/collab/metrics.py]
