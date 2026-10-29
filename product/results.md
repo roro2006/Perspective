@@ -324,3 +324,35 @@ Phase 2 gate check (design doc section 4), on the existing LoRA:
   met** as written. The flaw is in the benchmark: hidden targets are a unique
   colour, so any condition with the person view finds them. A fair hidden kind
   needs a same-colour pair with one hidden.
+
+## SmolVLA, first closed-loop picks (target 5, T5-07 and T5-08)
+
+SmolVLA (450 M) fine-tuned on 270 scripted pick demonstrations (target ringed
+on the robot camera, person view as a second camera), 2,500 steps at batch 32
+on the RX 7900 XT (3 h; held-out loss 0.29 -> 0.17, flat after step 1,250).
+Evaluated closed loop in the physics sim on 50 unseen scenes, same targets in
+every condition. A pick = a block lifted >= 3 cm and held 0.5 s.
+
+| condition | picked target | picked pair partner | picked other | nothing |
+|---|---|---|---|---|
+| ring on target, words name it | 0.12 | 0.00 | 0.00 | 0.88 |
+| words only, no ring | 0.02 | 0.02 | 0.10 | 0.86 |
+| ring on partner, words name target | 0.00 | **0.14** | 0.00 | 0.86 |
+
+Re-planning every 10 steps instead of 50: ring 0.10, words 0.00, swapped
+partner 0.06. About 0.28 s per policy call on the GPU.
+
+What it shows:
+- **The ring steers the policy, the words do not.** With the ring on the
+  partner it picks the partner, never the named target; with no ring its few
+  picks are scattered across blocks. That is the behaviour the design needs:
+  the grounding layer decides, the policy executes.
+- **Grasping is the bottleneck.** Most rollouts end with nothing lifted: the
+  arm reaches the ringed block and closes beside or above it (target lifted
+  1 cm on average). A 2.5 cm block is about 8 px wide in a 256x256 robot
+  camera, which is too coarse for the last centimetres from that view alone.
+
+Likely fixes, in order: add the SO-101 wrist camera as the third view (the
+base model has three camera slots, and LeRobot SO-101 setups use one for
+exactly this); more and more varied demonstrations (out/demos300v is
+recorded); a shorter action chunk to match the 42-frame episodes.
