@@ -234,3 +234,50 @@ as a stand-in for knowing the person) gets attentive and slow people to about
 overall. Under our reaction model, 0.4 s at 90% precision does not look
 reachable with any features of the head alone; what decides it is how real
 people time looking against speaking (phase 3).
+
+### Phase 2a: the critic as a training signal (T4-10)
+
+Does a policy learn faster from the critic than from spoken corrections? The
+policy learns, per person, whose left/right they mean; every feedback source
+drives the same learner on the same simulated people, scenes and words (25 per
+person type and reaction family, 15 requests each). The gate was committed
+before the first run (8497bd2; design doc section 7). Run 2026-10-29, 13 s:
+
+    uv run curio-sim critic phase2
+
+| feedback | wrong reaches | wrong, last 5 requests | labels per reach | labels correct |
+|---|---|---|---|---|
+| none | 0.41 | 0.42 | 0.00 | - |
+| spoken ("no" = other one, silence = yes) | 0.24 | 0.22 | 1.00 | 0.90 |
+| critic | 0.20 | 0.17 | 0.90 | 0.99 |
+| critic + spoken | 0.20 | 0.17 | 0.90 | 0.99 |
+| oracle (true wanted block) | 0.19 | 0.16 | 1.00 | 1.00 |
+
+Wrong reaches over the last 5 requests:
+
+| feedback | own-frame | robot-frame | mixed | attentive | slow | distracted | silent |
+|---|---|---|---|---|---|---|---|
+| spoken | 0.03 | 0.23 | 0.41 | 0.17 | 0.16 | 0.16 | 0.40 |
+| critic + spoken | 0.03 | 0.05 | 0.42 | 0.18 | 0.15 | 0.15 | 0.18 |
+| oracle | 0.03 | 0.04 | 0.42 | 0.17 | 0.16 | 0.16 | 0.16 |
+
+**Gate: pass, narrowly.** critic + spoken cuts wrong reaches over the last 5
+requests by 25.4% against spoken alone (bar: 25%), no person type is worse,
+and its labels are 99% correct. Repeated on seeds 4 and 5: 26.0% and 27.6%,
+both pass.
+
+What it shows, and what it does not:
+- **The whole gain is people who do not speak up.** Spoken feedback reads
+  silence as "yes", so for silent people a wrong reach teaches the wrong frame
+  (0.40 wrong at the end, the same as no learning). The critic reads their
+  reaction instead and gets them to 0.18, close to the oracle's 0.16. For
+  people who do say "no", critic and speech are equal (0.144 against 0.149 on
+  seed 4).
+- **Its labels are cleaner:** 99% correct against 90% for speech-with-silence.
+- **The size of the gain is set by our assumptions.** Silent people are a
+  quarter of the simulated population by design, and the critic was trained on
+  the same reaction model. How many real people stay quiet when a robot gets it
+  wrong, and whether their head shows it, is what phase 3 has to measure.
+- Mixed people stay at 0.42 under every source, including the oracle: a policy
+  that picks one frame per person cannot serve someone who uses both 50/50.
+  Target 1 handles them by asking, which this learner does not do.

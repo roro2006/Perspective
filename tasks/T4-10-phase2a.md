@@ -1,7 +1,7 @@
 ---
 id: T4-10
 title: Phase 2a, critic labels as a training signal for a target-choice policy
-status: todo
+status: done
 agent: claude
 depends: [T4-09]
 owns: [curio_robot/critic/learn.py, curio_robot/critic/cli.py, tests/test_t4_learn.py, tests/test_t4_cli.py, product/results.md]
