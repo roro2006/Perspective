@@ -1,7 +1,7 @@
 ---
 id: T4-06
 title: Critic metrics, threshold choice and the phase 1 gate
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/critic/evaluate.py]

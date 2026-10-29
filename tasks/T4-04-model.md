@@ -1,7 +1,7 @@
 ---
 id: T4-04
 title: The learned critic (numpy MLP with masked softmax)
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/critic/model.py]

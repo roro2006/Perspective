@@ -1,7 +1,7 @@
 ---
 id: T4-05
 title: The gaze rule as a critic (baseline)
-status: todo
+status: done
 agent: qwen
 depends: []
 owns: [curio_robot/critic/baseline.py]
