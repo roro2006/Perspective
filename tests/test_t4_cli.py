@@ -29,3 +29,14 @@ def test_gen_train_eval_from_the_command_line(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "12 episodes" in out and "loss" in out
     assert "overall" in json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+
+
+def test_phase2_runs_every_source_and_gates(tmp_path):
+    from curio_robot.critic.cli import format_phase2, phase2
+    from curio_robot.critic.model import Critic
+
+    summary = phase2(1, 3, 0, Critic(seed=0), 0.85, tmp_path)
+    assert (tmp_path / "summary.json").exists()
+    assert set(summary["sources"]) == {"none", "spoken", "critic", "critic+spoken", "oracle"}
+    assert set(summary["gate"]) == {"fewer_errors", "no_type_worse", "labels_accurate"}
+    assert "Gate:" in format_phase2(summary)

@@ -101,3 +101,27 @@ case where the critic has to work from gaze alone.
 
 Running the critic inside the live runtime (in place of the gaze rule) is a
 follow-up after the gate, not part of phase 1.
+
+## 7. Phase 2a: the critic as a training signal (T4-10)
+The SmolVLA motor policy in the brief needs new packages, a weights download
+and an untested GPU setup. Phase 2a tests the same claim first, cheaply: do
+critic labels teach a policy faster than spoken corrections?
+
+- **Policy:** per person, whose left/right they mean (a Beta belief over the
+  speaker and robot frames, as in target 1). It reads the words in its chosen
+  frame and reaches.
+- **People:** own-frame, robot-frame and mixed (p_own_frame 0.95, 0.05, 0.5),
+  crossed with the four reaction families, 25 per cell, 15 requests each.
+  Every source sees the same scenes and words (`critic/learn.py`).
+- **Sources:** none; spoken ("no" means the other one, silence means yes);
+  critic (its verdict at the end of the reach when p_wrong >= the phase 1 stop
+  threshold or <= 1 minus it); critic+spoken (a heard "no" wins); oracle.
+
+**Gate, fixed before the first run:** critic+spoken against spoken alone, on
+each person's last 5 requests:
+- wrong reaches at least 25% lower (relative);
+- no person type more than 0.02 worse;
+- critic+spoken labels at least 90% correct.
+
+The critic was trained on the same simulated reactions it labels here, so a
+pass says the signal is worth testing on people, not that it works on them.
