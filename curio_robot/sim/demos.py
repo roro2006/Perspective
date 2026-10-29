@@ -14,7 +14,15 @@ for a better expert.
 Frames are 10 Hz, one per CONTROL_DT * TICKS_PER_FRAME. Frame f is observed at
 t = f / FPS; its action is the ctrl in force when frame f + 1 is observed (the
 expert's ramp sampled at 10 Hz, so replaying actions at 10 Hz follows the
-demonstration). The last frame's action is the final ctrl (hold)."""
+demonstration). The last frame's action is the final ctrl (hold).
+
+Target marker (T5-07): a policy learns *which* block from a ring drawn on the
+robot image at the target pixel, the visual prompt the grounding layer will
+give it. Recordings stay raw; the ring is drawn at conversion time
+(draw_marker, marker_uv), so its look and mode can change without
+re-recording. Mode "start" keeps the ring at the target's start pixel for the
+whole episode, as at run time, where grounding points once before the pick;
+"track" follows the block."""
 
 from __future__ import annotations
 
@@ -37,6 +45,12 @@ FORMAT = "curio-demos-0.1"
 FPS = 10
 TICKS_PER_FRAME = round(1.0 / (FPS * CONTROL_DT))  # 5 control ticks of 20 ms
 MAX_ATTEMPTS_PER_EPISODE = 5  # when failed picks are skipped, give up after this many tries
+
+# The target ring, sized for 256x256 robot images, where a block is about 8 px across.
+MARKER_RADIUS = 9  # px from the target pixel to the middle of the ring
+MARKER_WIDTH = 2  # px, ring thickness
+MARKER_COLOUR = (255, 0, 255)  # magenta: no block, table or arm has it
+MARKER_MODES = ("start", "track")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +86,38 @@ def target_pixel(world: PhysWorld, i: int, robot: CameraFrame) -> tuple[float, f
     if not (0 <= u < robot.intrinsics.width and 0 <= v < robot.intrinsics.height):
         return None
     return (round(float(u), 2), round(float(v), 2))
+
+
+def draw_marker(
+    rgb: np.ndarray,
+    uv: tuple[float, float] | list[float] | None,
+    radius: float = MARKER_RADIUS,
+    width: float = MARKER_WIDTH,
+    colour: tuple[int, int, int] = MARKER_COLOUR,
+) -> np.ndarray:
+    """A copy of rgb with a ring of the given radius centred on pixel uv.
+
+    uv None (target outside the image) leaves the copy unmarked. The ring may
+    run off the image edge; only the part inside is drawn."""
+    out = np.array(rgb, copy=True)
+    if uv is None:
+        return out
+    h, w = out.shape[:2]
+    vv, uu = np.mgrid[0:h, 0:w]
+    # Pixel centres are at integer + 0.5 in the projection's convention.
+    dist = np.hypot(uu + 0.5 - uv[0], vv + 0.5 - uv[1])
+    out[np.abs(dist - radius) <= width / 2] = colour
+    return out
+
+
+def marker_uv(episode: dict, frame: dict, mode: str = "start") -> list[float] | None:
+    """Where the ring goes on this frame: the target's start pixel ("start",
+    episodes.jsonl) or its current pixel ("track", the frame's line)."""
+    if mode == "start":
+        return episode["target_pixel"]
+    if mode == "track":
+        return frame["target_pixel"]
+    raise ValueError(f"marker mode {mode!r} not in {MARKER_MODES}")
 
 
 def _observe(world: PhysWorld, i: int) -> _Frame:

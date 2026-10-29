@@ -39,6 +39,41 @@ expert that picks a block at a given position, and recorded demonstrations
 your approval of the lerobot install and SmolVLA download) fine-tunes SmolVLA
 on those demonstrations, conditioned on the target point.
 
+### Fine-tuning (T5-07)
+- **Data:** `uv run curio-sim demos --n 300 --seed 1000 --size 256x256 --out
+  out/demos300`: 300 successful picks (301 attempts), 42 frames each at 10 Hz,
+  12,600 frames, 958 MB of PNGs, 3.5 min. Words: 245 "on my left/right"
+  (person's frame), 55 colour-only. 256x256 matches the base checkpoint's
+  camera shape. Episodes 0-269 train (11,340 frames), 270-299 held out.
+- **Target marker:** a magenta ring (radius 9 px, 2 px wide; `demos.MARKER_*`)
+  on camera1 at the target's *start* pixel for the whole episode, drawn at
+  conversion time (`demos.draw_marker`, `marker_uv`), so recordings stay raw.
+  "start" mirrors run time, where grounding points once before the pick;
+  `--marker track` follows the block instead.
+- **Features:** camera1 = robot view + ring, camera2 = person's view, state
+  and action 6 joints, task = the words. The base's camera3 is dropped
+  (`input_features` lists two cameras, `empty_cameras=0`).
+- **Format:** `scripts/smolvla_dataset.py` can write a LeRobotDataset v3
+  (images, no video), but lerobot[dataset] (datasets, pyarrow, pandas, av) is
+  not installed in the lerobot venv and installing was not approved. Training
+  therefore reads the demos folder directly (`CurioPickFrames`, the samples
+  LeRobotDataset would give SmolVLA) with lerobot-train's loop written out in
+  `scripts/smolvla_train.py` (policy preset AdamW 1e-4, cosine with warmup,
+  grad clip 10, VLM frozen: 99.9 M trainable parameters).
+- **Smoke (100 steps, batch 32):** 4.2 s/step, data loading ~0 (4 workers),
+  8.7 GB peak allocated / 8.9 GB reserved of 20 GB; loss 1.34 -> 0.27,
+  held-out loss 0.44 (step 50) -> 0.35 (step 100). A checkpoint is 1.5 GB
+  (policy plus optimizer state).
+- **Full run:** started 2026-10-29 16:22, 2,500 steps at batch 32 (about 7
+  epochs), eval every 250 steps, checkpoint every 500; expected end about
+  19:30. Log `out/smolvla/run1/train_log.jsonl` (stdout/stderr beside it),
+  checkpoints `out/smolvla/run1/checkpoints/<step>/pretrained_model`.
+
+      set HF_HUB_OFFLINE=1 HF_HUB_DISABLE_SYMLINKS_WARNING=1 WANDB_MODE=disabled
+      <lerobot venv>/python scripts/smolvla_train.py --demos out/demos300
+          --out out/smolvla/run1 --steps 2500 --batch-size 32 --workers 4
+          --log-freq 25 --eval-freq 250 --save-freq 500   # --resume to continue
+
 ## 4. Gates (fixed before results)
 - Phase 1: benchmark generation is deterministic per seed; every item's target
   is the block its words and frame pick.
