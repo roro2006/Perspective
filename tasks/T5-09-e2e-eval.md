@@ -1,7 +1,7 @@
 ---
 id: T5-09
 title: End-to-end experiment harness: grounder places the ring, SmolVLA picks
-status: todo
+status: done
 agent: claude
 depends: [T5-08]
 owns: [scripts/e2e_eval.py, tests/test_t5_e2e.py, docs/target5-perspective-policy.md]

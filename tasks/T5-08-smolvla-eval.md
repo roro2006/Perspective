@@ -1,7 +1,7 @@
 ---
 id: T5-08
 title: Closed-loop evaluation of the fine-tuned SmolVLA in the physics sim
-status: todo
+status: done
 agent: claude
 depends: [T5-07]
 owns: [scripts/smolvla_eval.py, docs/target5-perspective-policy.md]
