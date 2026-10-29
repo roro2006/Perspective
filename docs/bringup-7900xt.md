@@ -115,12 +115,41 @@ forward failed in rope indexing (mask 211 vs tensor 210). Every per-token
 tensor now grows with the answer, which is a text token. Separately, a crashed
 run can hang on exit under HIP on Windows, burning a CPU core; kill it.
 
+## Full training run (2026-10-28)
+`out/grounding`: 3,000 sim examples (seed 0, 1,000 per kind), 2,698 train and
+302 held out by id hash. Defaults: 3 epochs, batch 1, grad accum 16 (507
+optimizer steps), lr 2e-4, LoRA r=16 on q/k/v/o. **41 minutes** on the card,
+4.6 s per optimizer step (16 examples), peak VRAM 9.7 GB allocated.
+
+Held-out eval during training: 80.5% after epoch 1, 82.5% after 2, 84.1% after 3.
+
+Base vs adapter on the same 302 held-out examples (argmax over each example's
+letters, scored in PyTorch with `train_lora`'s own encoding):
+
+| Kind | n | Base Qwen3-VL-4B | With the LoRA |
+|---|---|---|---|
+| color | 105 | 0.990 | **1.000** |
+| relation | 96 | 0.469 | **0.917** |
+| deictic | 101 | 0.208 | **0.604** |
+| all | 302 | 0.563 | **0.841** |
+
+The base model's 0.563 here agrees with llama.cpp's 0.54 above, so the two
+stacks see the same model. Relation is near its ceiling: in unmarked requests
+the right answer follows a frame the simulated person drew at random with the
+habit shown in the prompt (0.15 or 0.85), so the best possible is about 0.92.
+Deictic ("hand me that one", from where the person looks) is where the
+remaining error is. These are simulated scenes and simulated people. Per-request
+latency in PyTorch rose from 116 to 135 ms with the adapter unmerged.
+
+Adapter: `out/lora/qwen3vl4b-r16` (not in git; `heldout_scores.json` and
+`train_log.jsonl` next to it).
+
 ## Not done yet
 - **Contention run**: whisper-server, Kokoro and the detector aren't installed
   on this machine.
 - **Word timestamps** (`anchor.parse_words` vs whisper-server's JSON): needs
   whisper-server. `WhisperCppServer.transcribe_words` still uses guessed fields.
-- **A full training run** and scoring the adapter with `curio-sim ground-eval`:
-  llama-server needs the adapter merged and converted to GGUF (or served with
-  `--lora`), which isn't set up yet.
+- **Serving the adapter**: llama-server needs it merged and converted to GGUF
+  (or served with `--lora`), so `curio-sim ground-eval` and the live runtime
+  still use the base model.
 - **8B comparison**: not run (see above).
