@@ -113,7 +113,7 @@ def test_conditions_paired_gives_both_views_and_no_geometry(bench):
         assert _n_images(req) == 2
         assert sorted(req.letters.values()) == sorted(o.object_id for o in b.object_map.objects)
         text = _text(req)
-        assert "speaker's" not in text and "robot's left" not in text
+        assert "(speaker's" not in text and "(robot's" not in text  # no per-object geometry
         assert b.text in text and text.startswith(conditions.INTRO)
 
 
