@@ -1,7 +1,7 @@
 ---
 id: T3-10
 title: Pilot study protocol for real people
-status: doing
+status: done
 agent: claude
 depends: [T3-02]
 owns: [docs/pilot-protocol.md]

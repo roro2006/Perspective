@@ -1,7 +1,7 @@
 ---
 id: T3-06
 title: Run a multi-step task live and record it as a Session
-status: doing
+status: done
 agent: claude
 depends: [T3-01, T3-03, T3-04]
 owns: [curio_robot/collab/run.py, tests/test_t3_run.py]
