@@ -150,6 +150,62 @@ in `PhysWorld`, on scenes it never trained on.
           --checkpoint out/smolvla/run1/checkpoints/002500/pretrained_model
           --n 50 --device cuda --out out/smolvla/eval_run1
 
+### End to end (T5-09)
+`scripts/e2e_eval.py` is the headline experiment: a person asks for a block,
+a setup decides where the ring goes, and the fine-tuned SmolVLA picks in
+closed loop in `PhysWorld`.
+- **Requests** (kinds in turn): `my` ("the red one on my left"), `your`
+  ("... on your left"), `habit` ("... on the left", with the person's habit
+  0.15 or 0.85 shown to the grounder as in the benchmark) and `color` (unique
+  colour). Scenes `fetch_scene(default_rng(s))` without the box, s = 70000+.
+  Pair kinds keep only scenes where the person's and the robot's side pick
+  different blocks (as `bench/items.py` does); scenes whose target or partner
+  falls outside the policy's 256x256 robot image are skipped.
+- **Setups:** `words` (no ring, words only), `base` (the base Qwen3-VL
+  grounder, geometry condition: `bench.conditions.build("geometry", item)` on
+  a `BenchItem` built from the PhysWorld scene at the benchmark's 320x240,
+  i.e. the live Curio request), `lora` (the same, target-2 LoRA served),
+  `oracle` (ring on the true target). The ring sits at the chosen block's
+  start pixel in the policy image; the policy also gets the words.
+- **Two stages,** because the grounder server and the policy do not share
+  the GPU comfortably. `ground` (project env) writes `trials.jsonl` (seed,
+  kind, words, frame, habit, target, partner, every block's pixel at both
+  sizes), `choices_oracle.jsonl`, `choices_words.jsonl` and
+  `choices_<name>.jsonl` (chosen block, its pixel, letter probabilities,
+  latency). A second `ground` run must produce the same trials (same `--n`,
+  `--seed`) or it stops. `rollout` (lerobot venv) reuses `smolvla_eval`'s
+  policy loading, ring and rollout, appends to `rollouts.jsonl` (a rerun
+  skips finished rollouts), and writes `summary.json` and a table: per setup
+  and per kind, grounding accuracy and the pick outcome rates (target,
+  partner, other, nothing). `--url fake` picks the first letter, for tests.
+- **CPU smoke** (fake grounder, 8 trials; rollout with the 100-step smoke
+  checkpoint, 1 trial x words/base/oracle, 1 s horizon): ground 1.3 s;
+  rollout 41-45 s per model call, all `nothing` as expected; rings land on
+  the chosen block. A rerun skipped all three rollouts.
+- **Real run** after training, from the repo root (PowerShell; `$d` as in
+  `docs/bringup-7900xt.md`):
+
+      # 1. base grounder
+      & "$d\vulkan\llama-server.exe" -m "$d\models\Qwen3VL-4B-Instruct-Q8_0.gguf" `
+        --mmproj "$d\models\mmproj-Qwen3VL-4B-Instruct-F16.gguf" -dev Vulkan0 -ngl 99 -fa on `
+        -c 8192 --jinja --parallel 1 --alias qwen-vl --host 127.0.0.1 --port 8081
+      uv run python scripts/e2e_eval.py ground --name base `
+        --url http://127.0.0.1:8081/v1 --n 200 --out out/e2e/run1
+      # 2. stop the server (Ctrl+C), restart it with the LoRA (a fresh server:
+      #    the prompt cache must not carry over), ground again
+      & "$d\vulkan\llama-server.exe" <same arguments> `
+        --lora "$d\models\lora\curio-ground-r16-f16.gguf"
+      uv run python scripts/e2e_eval.py ground --name lora `
+        --url http://127.0.0.1:8081/v1 --n 200 --out out/e2e/run1
+      # 3. stop the server, then roll out every setup on the GPU
+      $env:HF_HUB_OFFLINE = "1"
+      <lerobot venv>/python scripts/e2e_eval.py rollout --out out/e2e/run1 `
+        --checkpoint out/smolvla/run1/checkpoints/002500/pretrained_model --device cuda
+
+  200 trials x 4 setups = 800 rollouts. Add `--n-action-steps 10` (and a
+  separate `--out` copy of the ground files) to compare re-observing every
+  second, as for T5-08.
+
 ## 4. Gates (fixed before results)
 - Phase 1: benchmark generation is deterministic per seed; every item's target
   is the block its words and frame pick.
