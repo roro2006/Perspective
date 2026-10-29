@@ -12,10 +12,10 @@ import numpy as np
 from PIL import Image
 
 from curio_robot import perspective
-from curio_robot.collab.tasks import apply_scene, fetch_scene, true_map
+from curio_robot.collab.tasks import TaskScene, apply_scene, fetch_scene, true_map
 from curio_robot.conventions.readings import Frame
 from curio_robot.geometry import project
-from curio_robot.sim.world import SimWorld
+from curio_robot.sim.world import ROBOT_CAM_POS, SimWorld
 from curio_robot.types import (
     HUMAN_CAM,
     ROBOT_CAM,
@@ -26,13 +26,52 @@ from curio_robot.types import (
     WorldObject,
 )
 
-KINDS = ("color", "marked", "habit", "hidden")
+# New kinds go at the end: generate() draws kind-major from one rng, so the
+# items of earlier kinds stay identical for the same seed.
+KINDS = ("color", "marked", "habit", "hidden", "hidden-pair", "free")
 HABITS = (0.15, 0.85)  # p_own_frame shown for "habit" items, as in sim/grounding_data.py
 MIN_VISIBLE_PX = 20  # a block with fewer robot-camera pixels counts as hidden from the robot
 MAX_ATTEMPTS = 200  # redraws allowed while looking for an ambiguous pair
 
 SINGLE_INDEX = 4  # the single block in fetch_scene's default layout (after two pairs)
 PAIR_BLOCKS = 4  # blocks 0..3 are the two same-colour pairs
+
+BOX_OFFSET = 0.045  # box centre from the hidden block toward the robot camera, m (fetch_scene)
+BOX_HALF = (0.012, 0.055)  # box half extents: thin side toward the robot, width (sim.world)
+BLOCK_HALF = 0.0125  # block half size, m (sim.world.BLOCK_HALF)
+MIN_DISTANCE_GAP = 0.02  # "closest"/"farthest" need the pair this much apart in distance, m
+
+FREE_LEADS = ("Hand me", "Pass me", "Could you get me", "Grab")
+FREE_NOUNS = ("one", "block", "cube", "thing")
+# (relation, frame, template) with {lead} {color} {noun} {side} filled in. Half
+# the side templates name the frame without the rule's " my "/" your " cue;
+# the distance templates have no left/right at all. Distance templates
+# outnumber side ones because more distance draws are rejected (the two
+# viewers must disagree), which keeps the accepted mix near half and half.
+FREE_TEMPLATES: tuple[tuple[str, Frame, str], ...] = (
+    ("side", "speaker", "{lead} the {color} {noun} to my {side}"),
+    ("side", "speaker", "{lead} the {color} {noun} on my {side}-hand side"),
+    ("side", "speaker", "{lead} the {side} {color} {noun} from where I sit"),
+    ("side", "speaker", "{lead} the {color} {noun} on the {side} as I see it"),
+    ("side", "robot", "{lead} the {color} {noun} to your {side}"),
+    ("side", "robot", "{lead} the {color} {noun} on your {side}-hand side"),
+    ("side", "robot", "{lead} the {side} {color} {noun} from where you are"),
+    ("side", "robot", "{lead} the {color} {noun} on the {side} as you see it"),
+    ("nearest", "speaker", "{lead} the {color} {noun} closest to me"),
+    ("nearest", "speaker", "{lead} the {color} {noun} nearest me"),
+    ("farthest", "speaker", "{lead} the {color} {noun} farthest from me"),
+    ("farthest", "speaker", "{lead} the {color} {noun} further away from me"),
+    ("nearest", "robot", "{lead} the {color} {noun} closest to you"),
+    ("nearest", "robot", "{lead} the {color} {noun} nearest you"),
+    ("farthest", "robot", "{lead} the {color} {noun} farthest from you"),
+    ("farthest", "robot", "{lead} the {color} {noun} further away from you"),
+    ("nearest", "speaker", "{lead} the {color} {noun} nearer to me"),
+    ("nearest", "speaker", "{lead} the {color} {noun} at my end of the table"),
+    ("farthest", "speaker", "{lead} the {color} {noun} on the far side from me"),
+    ("nearest", "robot", "{lead} the {color} {noun} nearer to you"),
+    ("nearest", "robot", "{lead} the {color} {noun} at your end of the table"),
+    ("farthest", "robot", "{lead} the {color} {noun} on the far side from you"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,11 +121,17 @@ def make_item(world: SimWorld, rng: np.random.Generator, kind: str, item_id: str
       scene and repeat (at most MAX_ATTEMPTS, then RuntimeError).
       marked: text f"Hand me the {color} one on {m} {side}", m "my" for
       speaker, "your" for robot; p_own_frame None.
-      habit: text f"Hand me the {color} one on the {side}"; p_own_frame = p."""
+      habit: text f"Hand me the {color} one on the {side}"; p_own_frame = p.
+    - hidden-pair: a "marked" request whose target is a pair block the box
+      hides from the robot, while its partner stays visible: robot-only
+      cannot answer and the frame still matters (_try_hidden_pair).
+    - free: varied wording a keyword rule cannot parse, with an exact answer
+      from perspective.pick (_try_free, FREE_TEMPLATES)."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind: {kind}")
+    attempt = {"hidden-pair": _try_hidden_pair, "free": _try_free}.get(kind, _try_item)
     for _ in range(MAX_ATTEMPTS):
-        item = _try_item(world, rng, kind, item_id)
+        item = attempt(world, rng, kind, item_id)
         if item is not None:
             return item
     raise RuntimeError(f"no ambiguous {kind} item in {MAX_ATTEMPTS} attempts")
@@ -146,6 +191,120 @@ def _try_item(
         text=text,
         frame=frame,
         p_own_frame=p_own_frame,
+        target_id=target.object_id,
+        object_map=object_map,
+        robot_visible=visible,
+        human=human,
+        robot=robot,
+    )
+
+
+def _render(
+    world: SimWorld, scene: TaskScene
+) -> tuple[ObjectMap, tuple[str, ...], CameraFrame, CameraFrame]:
+    """Apply and render a scene: (object_map, robot_visible, human, robot), unsegmented."""
+    apply_scene(world, scene)
+    human = world.render_camera(HUMAN_CAM)
+    robot = world.render_camera(ROBOT_CAM, segmentation=True)
+    object_map = ObjectMap(true_map(scene).objects, robot.pose, human.pose)
+    visible = _robot_visible(world, object_map, robot)
+    return object_map, visible, replace(human, segmentation=None), replace(robot, segmentation=None)
+
+
+def _box_in_front(scene: TaskScene, index: int) -> TaskScene | None:
+    """The scene with the box BOX_OFFSET in front of block `index` toward the
+    robot camera, placed as fetch_scene places it for the single block; None
+    when the box would overlap another block."""
+    target = np.asarray(scene.blocks[index].xy)
+    toward = ROBOT_CAM_POS[:2] - target
+    toward = toward / np.linalg.norm(toward)
+    across = np.array([-toward[1], toward[0]])
+    centre = target + BOX_OFFSET * toward
+    for i, block in enumerate(scene.blocks):
+        d = np.asarray(block.xy) - centre
+        near_along = abs(d @ toward) < BOX_HALF[0] + BLOCK_HALF
+        if i != index and near_along and abs(d @ across) < BOX_HALF[1] + BLOCK_HALF:
+            return None
+    yaw = float(np.arctan2(toward[1], toward[0]))
+    return replace(scene, occluder=(float(centre[0]), float(centre[1])), occluder_yaw=yaw)
+
+
+def _try_hidden_pair(
+    world: SimWorld, rng: np.random.Generator, kind: str, item_id: str
+) -> BenchItem | None:
+    """scene = fetch_scene(rng) (no box); idx = int(rng.integers(0, 4)); frame
+    = "speaker" if rng.random() < 0.5 else "robot"; the box goes in front of
+    block idx. Words as "marked". None when the words are not ambiguous, the
+    box overlaps a block, the target is robot-visible or its partner is not."""
+    scene = fetch_scene(rng)
+    idx = int(rng.integers(0, PAIR_BLOCKS))
+    frame: Frame = "speaker" if rng.random() < 0.5 else "robot"
+    boxed = _box_in_front(scene, idx)
+    if boxed is None:
+        return None
+    exact = true_map(boxed)
+    target = exact.objects[idx]
+    cands = exact.by_color(target.color)
+    viewer = exact.human_pose if frame == "speaker" else exact.robot_pose
+    side = "left" if perspective.pick(cands, "left", viewer) is target else "right"
+    if _same_pick(cands, side, exact.human_pose, exact.robot_pose):
+        return None
+    object_map, visible, human, robot = _render(world, boxed)
+    partner = next(o for o in cands if o is not target)
+    if target.object_id in visible or partner.object_id not in visible:
+        return None
+    m = "my" if frame == "speaker" else "your"
+    return BenchItem(
+        id=item_id,
+        kind=kind,
+        text=f"Hand me the {target.color} one on {m} {side}",
+        frame=frame,
+        p_own_frame=None,
+        target_id=target.object_id,
+        object_map=object_map,
+        robot_visible=visible,
+        human=human,
+        robot=robot,
+    )
+
+
+def _try_free(
+    world: SimWorld, rng: np.random.Generator, kind: str, item_id: str
+) -> BenchItem | None:
+    """scene = fetch_scene(rng) (no box); idx = int(rng.integers(0, 4)) picks
+    a pair block; then a template, lead and noun, each by rng.integers over its
+    tuple. Side relations: target = block idx, side = the one perspective.pick
+    gives it from the frame's viewer. nearest/farthest: target = what pick
+    gives in idx's pair from that viewer, whose distances must differ by >=
+    MIN_DISTANCE_GAP. None when the other frame's viewer would pick the same
+    block (the frame must matter)."""
+    scene = fetch_scene(rng)
+    idx = int(rng.integers(0, PAIR_BLOCKS))
+    relation, frame, template = FREE_TEMPLATES[int(rng.integers(0, len(FREE_TEMPLATES)))]
+    lead = FREE_LEADS[int(rng.integers(0, len(FREE_LEADS)))]
+    noun = FREE_NOUNS[int(rng.integers(0, len(FREE_NOUNS)))]
+    exact = true_map(scene)
+    target = exact.objects[idx]
+    cands = exact.by_color(target.color)
+    viewer = exact.human_pose if frame == "speaker" else exact.robot_pose
+    other = exact.robot_pose if frame == "speaker" else exact.human_pose
+    side = ""
+    if relation == "side":
+        side = "left" if perspective.pick(cands, "left", viewer) is target else "right"
+        if _same_pick(cands, side, exact.human_pose, exact.robot_pose):
+            return None
+    else:
+        target = perspective.pick(cands, relation, viewer)
+        a, b = (perspective.horizontal_distance(o, viewer) for o in cands)
+        if abs(a - b) < MIN_DISTANCE_GAP or perspective.pick(cands, relation, other) is target:
+            return None
+    object_map, visible, human, robot = _render(world, scene)
+    return BenchItem(
+        id=item_id,
+        kind=kind,
+        text=template.format(lead=lead, color=target.color, noun=noun, side=side),
+        frame=frame,
+        p_own_frame=None,
         target_id=target.object_id,
         object_map=object_map,
         robot_visible=visible,
