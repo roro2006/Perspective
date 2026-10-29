@@ -1,7 +1,7 @@
 ---
 id: T3-11
 title: Collaboration results write-up
-status: todo
+status: doing
 agent: claude
 depends: [T3-07, T3-09]
 owns: [product/results.md]
