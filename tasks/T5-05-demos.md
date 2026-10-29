@@ -1,7 +1,7 @@
 ---
 id: T5-05
 title: Recorded pick demonstrations for policy training
-status: todo
+status: done
 agent: claude
 depends: [T5-04]
 owns: [curio_robot/sim/demos.py, tests/test_t5_demos.py]
