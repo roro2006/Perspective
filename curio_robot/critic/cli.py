@@ -20,6 +20,9 @@ TRAIN_FAMILIES = ("attentive", "slow", "distracted")  # silent is held out
 BASELINE_THRESHOLD = 0.5  # the rule's p_wrong is 0 or 1, so any threshold in (0, 1] is the same
 SEEDS = {"train": 0, "val": 1, "test": 2}
 ROWS = ("precision", "recall", "false_alarm_rate", "lead_s", "target_acc", "auroc", "threshold")
+# A second operating point for a cheap action (slow the arm and ask), which can
+# afford more false alarms than stopping can. Not part of the gate.
+SLOW_PRECISION = 0.75
 
 
 def add_parser(sub: argparse._SubParsersAction) -> None:
@@ -111,9 +114,13 @@ def phase1(
 
     critic = Critic(seed=0)
     losses = critic.fit(train, epochs, lr, seed=0)
-    threshold = threshold_for_precision(val, score_all(val, critic.predict))
+    val_scored, test_scored = score_all(val, critic.predict), score_all(test, critic.predict)
+    threshold = threshold_for_precision(val, val_scored)
     used = threshold if threshold is not None else BASELINE_THRESHOLD
-    critic_report = report(test, score_all(test, critic.predict), used)
+    critic_report = report(test, test_scored, used)
+    slow_threshold = threshold_for_precision(val, val_scored, SLOW_PRECISION)
+    slow_used = slow_threshold if slow_threshold is not None else BASELINE_THRESHOLD
+    slow_report = report(test, test_scored, slow_used)
     baseline_report = report(test, score_all(test, rule_scores), BASELINE_THRESHOLD)
 
     summary = {
@@ -121,7 +128,9 @@ def phase1(
         "epochs": epochs,
         "losses": [losses[0], losses[-1]] if losses else [],
         "threshold": threshold,
+        "threshold_slow": slow_threshold,
         "critic": critic_report,
+        "critic_slow": slow_report,
         "baseline": baseline_report,
         "gate": gate(critic_report["overall"]),
         "gate_baseline": gate(baseline_report["overall"]),
@@ -144,10 +153,13 @@ def format_table(summary: dict) -> str:
     """Markdown: one row per metric for the critic and the gaze rule, then per
     family, then the gate."""
     c, b = summary["critic"]["overall"], summary["baseline"]["overall"]
-    lines = ["| metric | critic | gaze rule | gate |", "|---|---|---|---|"]
+    s = summary["critic_slow"]["overall"]
+    lines = ["| metric | critic | critic, slow-and-ask | gaze rule | gate |",
+             "|---|---|---|---|---|"]
     for row in ROWS:
         bar = f">= {GATE[row]}" if row in GATE else ""
-        lines.append(f"| {row} | {_cell(c.get(row))} | {_cell(b.get(row))} | {bar} |")
+        cells = (c.get(row), s.get(row), b.get(row))
+        lines.append(f"| {row} | " + " | ".join(_cell(v) for v in cells) + f" | {bar} |")
     lines += [
         "",
         "| family | critic recall | critic lead_s | critic target_acc | rule recall | rule lead_s |",

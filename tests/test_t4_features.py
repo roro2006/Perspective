@@ -61,3 +61,44 @@ def test_features_are_causal():
     a = make_ep([0] * 31, speech=((2.5, "no"),), t_no=2.3)
     b = make_ep([0] * 20 + [1] * 11)
     assert np.allclose(features(a)[:20], features(b)[:20])
+
+
+# ---- T4-09: finer gaze, measured against the gripper ----
+
+
+def _watching_gripper(ep):
+    from dataclasses import replace
+
+    from critic_util import HEAD, unit
+
+    return replace(ep, head_fwd=unit(ep.gripper - HEAD))
+
+
+def test_toward_is_0_on_the_gripper_and_1_on_the_block():
+    on_block = features(make_ep([1] * 31))
+    assert on_block[5, 1, COL["toward"]] == pytest.approx(1.0, abs=1e-6)
+    on_grip = features(_watching_gripper(make_ep()))
+    assert np.allclose(on_grip[:, :, COL["toward"]], 0.0, atol=1e-6)
+    assert np.allclose(on_grip[:, 0, COL["off_gripper"]], 0.0, atol=1e-4)
+    assert on_block[5, 0, COL["off_gripper"]] > 0.5
+
+
+def test_toward_ema_lags_a_jump_and_toward_vel_spikes():
+    x = features(make_ep([0] * 10 + [1] * 21))
+    jump, ema, vel = x[:, 1, COL["toward"]], x[:, 1, COL["toward_ema"]], x[:, 1, COL["toward_vel"]]
+    assert jump[10] == pytest.approx(1.0, abs=1e-6)
+    assert jump[9] < ema[10] < jump[10]
+    assert vel[10] > 0.0 and vel[0] == 0.0
+
+
+def test_fine_dwell_separates_neighbours_the_wide_cone_does_not():
+    x = features(make_ep([1] * 31))
+    assert x[10, 2, COL["dwell"]] > 0.0  # blue is 8.37 deg off: inside 10 deg
+    assert x[10, 2, COL["dwell_fine"]] == 0.0  # but not inside 4 deg
+    assert x[10, 1, COL["dwell_fine"]] == pytest.approx(1.0)
+
+
+def test_angle_vel_is_negative_when_turning_to_a_block():
+    x = features(make_ep([0] * 10 + [1] * 21))
+    assert x[10, 1, COL["angle_vel"]] < 0.0 < x[10, 0, COL["angle_vel"]]
+    assert x[0, 1, COL["angle_vel"]] == 0.0

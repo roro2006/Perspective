@@ -52,7 +52,9 @@ same watching and glancing, so glances are the false-alarm source.
 feature array (F, N, D): head angle to the block, how long the head has dwelt
 on it, whether it is the arm's target, gripper distance and approach, whether
 it matches the requested colour, reach progress, "no" heard and since when,
-head speed. Only what a running robot would have at that frame.
+head speed. Only what a running robot would have at that frame. T4-09 added six
+finer gaze features measured against the gripper direction (the two blocks of a
+pair are only ~9 deg apart from the person, inside one 10 deg cone).
 
 `critic/model.py` is a small numpy model, no new dependencies: one shared
 hidden layer scores each block, a softmax over the blocks matching the request
@@ -74,6 +76,10 @@ test set report:
 | lead_s | median over flagged wrong reaches with speech of (when "no" starts - alarm) | >= 0.4 |
 | target_acc | flagged wrong reaches where the top `intended` at the alarm is the wanted block | >= 0.85 |
 | auroc | episode score = max `p_wrong`, wrong = positive | reported |
+
+`phase1` also reports a second operating point, **slow and ask**, at 75%
+precision: a cheap action (slow the arm, ask "this one?") can afford more false
+alarms than stopping. It is reported, not gated.
 
 The brief's gate had no recall bar; 70% is added here because a very high
 threshold can reach 90% precision while flagging almost nothing.

@@ -12,7 +12,7 @@ def test_phase1_writes_the_model_and_summary(tmp_path):
     summary = phase1(40, 20, 20, epochs=2, out=tmp_path)
     assert (tmp_path / "model.npz").exists()
     saved = json.loads((tmp_path / "summary.json").read_text(encoding="utf-8"))
-    for key in ("critic", "baseline", "gate"):
+    for key in ("critic", "critic_slow", "baseline", "gate"):
         assert key in saved
     assert set(saved["critic"]["by_family"]) == {"attentive", "slow", "distracted", "silent"}
     table = format_table(summary)

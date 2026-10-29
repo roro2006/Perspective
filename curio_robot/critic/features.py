@@ -1,5 +1,5 @@
 """Per-frame, per-block features for the critic. Causal: frame f uses only
-what a running robot has at t[f]. Task T4-03."""
+what a running robot has at t[f]. Tasks T4-03, T4-09."""
 
 from __future__ import annotations
 
@@ -20,6 +20,14 @@ FEATURES = (
     "said_no",  # 1.0 once a transcript starting with "no" has arrived
     "since_no",  # seconds since that transcript, capped at SINCE_CAP
     "head_speed",  # head turn since the last frame, deg/s / HEAD_SPEED_SCALE
+    # Finer gaze (T4-09): the two blocks of a pair are only ~9 deg apart from the
+    # person, inside one GAZE_MAX_DEG cone, so measure the head against the gripper.
+    "off_gripper",  # head direction to gripper, deg / GAZE_MAX_DEG, clipped to ANGLE_CLIP
+    "toward",  # how far the head has moved from the gripper toward the block (1 = on it)
+    "toward_ema",  # toward, smoothed with time constant EMA_S
+    "toward_vel",  # change of toward per second / TOWARD_VEL_SCALE
+    "dwell_fine",  # as dwell, with a FINE_DEG cone
+    "angle_vel",  # change of angle per second, deg/s / HEAD_SPEED_SCALE (< 0: turning to it)
 )
 D = len(FEATURES)
 
@@ -29,6 +37,11 @@ DIST_SCALE = 0.3
 DIST_CLIP = 2.0
 SINCE_CAP = 2.0
 HEAD_SPEED_SCALE = 100.0
+FINE_DEG = 4.0
+EMA_S = 0.3
+TOWARD_CLIP = 2.0
+TOWARD_VEL_SCALE = 10.0
+MIN_SPREAD_DEG = 1.0  # toward is 0 when the block is this close to the gripper direction
 
 
 def _angles_deg(head_fwd: np.ndarray, v: np.ndarray) -> np.ndarray:
@@ -38,14 +51,14 @@ def _angles_deg(head_fwd: np.ndarray, v: np.ndarray) -> np.ndarray:
     return np.degrees(np.arccos(cos))
 
 
-def _dwell(t: np.ndarray, angles: np.ndarray) -> np.ndarray:
+def _dwell(t: np.ndarray, angles: np.ndarray, cone_deg: float = GAZE_MAX_DEG) -> np.ndarray:
     """(F, N) seconds each block has been inside the gaze cone, unbroken."""
     n_frames, n_blocks = angles.shape
     dwell = np.zeros((n_frames, n_blocks))
     for j in range(n_blocks):
         run_start: int | None = None
         for f in range(n_frames):
-            if angles[f, j] > GAZE_MAX_DEG:
+            if angles[f, j] > cone_deg:
                 run_start = None
                 continue
             if run_start is None:
@@ -95,6 +108,41 @@ def _head_speed(t: np.ndarray, head_fwd: np.ndarray) -> np.ndarray:
     return speed
 
 
+def _unit(v: np.ndarray) -> np.ndarray:
+    return v / np.linalg.norm(v, axis=-1, keepdims=True)
+
+
+def _toward(head_fwd: np.ndarray, grip_dir: np.ndarray, block_dir: np.ndarray) -> np.ndarray:
+    """(F, N): the head's offset from the gripper direction, projected on the
+    block's offset from it, in the plane across the gripper direction. 0 when
+    the head points at the gripper, 1 when it points at the block."""
+    g = grip_dir[:, None, :]  # (F, 1, 3)
+    w = head_fwd[:, None, :] - np.sum(head_fwd[:, None, :] * g, -1, keepdims=True) * g
+    u = block_dir[None, :, :] - np.sum(block_dir[None, :, :] * g, -1, keepdims=True) * g
+    uu = np.sum(u * u, -1)
+    ok = uu > np.sin(np.radians(MIN_SPREAD_DEG)) ** 2
+    toward = np.where(ok, np.sum(w * u, -1) / np.where(ok, uu, 1.0), 0.0)
+    return np.clip(toward, -TOWARD_CLIP, TOWARD_CLIP)
+
+
+def _ema(t: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """Causal exponential smoothing along frames with time constant EMA_S."""
+    out = np.array(x, dtype=float)
+    if len(t) > 1:
+        a = 1.0 - np.exp(-(t[1] - t[0]) / EMA_S)
+        for f in range(1, len(t)):
+            out[f] = out[f - 1] + a * (x[f] - out[f - 1])
+    return out
+
+
+def _rate(t: np.ndarray, x: np.ndarray, scale: float) -> np.ndarray:
+    """Per-frame change per second / scale; 0 at the first frame."""
+    out = np.zeros_like(x, dtype=float)
+    if len(t) > 1:
+        out[1:] = (x[1:] - x[:-1]) / (t[1] - t[0]) / scale
+    return out
+
+
 def features(ep: Episode) -> np.ndarray:
     """(F, N, D) float array, columns in FEATURES order.
 
@@ -115,7 +163,19 @@ def features(ep: Episode) -> np.ndarray:
       text.startswith("no").
     - since_no: min(t[f] - first such ts, SINCE_CAP) once said_no, else 0.
     - head_speed: 0 at f = 0; else degrees between head_fwd[f-1] and
-      head_fwd[f], / dt / HEAD_SPEED_SCALE. Same for every block."""
+      head_fwd[f], / dt / HEAD_SPEED_SCALE. Same for every block.
+    - off_gripper: degrees between head_fwd[f] and gripper[f] - head_pos,
+      / GAZE_MAX_DEG, clipped to ANGLE_CLIP. Same for every block.
+    - toward: with g, b_j the unit directions from head_pos to the gripper and
+      to block j, w = h - (h.g) g and u_j = b_j - (b_j.g) g: (w.u_j) / |u_j|^2,
+      clipped to +-TOWARD_CLIP; 0 where |u_j| < sin(MIN_SPREAD_DEG).
+    - toward_ema: toward smoothed causally, a = 1 - exp(-dt / EMA_S), starting
+      at toward[0].
+    - toward_vel: 0 at f = 0; else (toward[f] - toward[f-1]) / dt /
+      TOWARD_VEL_SCALE.
+    - dwell_fine: as dwell, with FINE_DEG instead of GAZE_MAX_DEG.
+    - angle_vel: 0 at f = 0; else (angle[f] - angle[f-1]) / dt /
+      HEAD_SPEED_SCALE, angle in degrees."""
     n_frames, n_blocks = len(ep.t), len(ep.obj_pos)
     angles = _angles_deg(ep.head_fwd, ep.obj_pos - ep.head_pos)
     dist = np.linalg.norm(ep.gripper[:, None, :] - ep.obj_pos[None, :, :], axis=-1)
@@ -133,4 +193,14 @@ def features(ep: Episode) -> np.ndarray:
     out[:, :, FEATURES.index("said_no")] = said[:, None]
     out[:, :, FEATURES.index("since_no")] = since[:, None]
     out[:, :, FEATURES.index("head_speed")] = _head_speed(ep.t, ep.head_fwd)[:, None]
+
+    grip_dir = _unit(ep.gripper - ep.head_pos)
+    off = np.degrees(np.arccos(np.clip(np.sum(ep.head_fwd * grip_dir, -1), -1.0, 1.0)))
+    toward = _toward(ep.head_fwd, grip_dir, _unit(ep.obj_pos - ep.head_pos))
+    out[:, :, FEATURES.index("off_gripper")] = np.minimum(off / GAZE_MAX_DEG, ANGLE_CLIP)[:, None]
+    out[:, :, FEATURES.index("toward")] = toward
+    out[:, :, FEATURES.index("toward_ema")] = _ema(ep.t, toward)
+    out[:, :, FEATURES.index("toward_vel")] = _rate(ep.t, toward, TOWARD_VEL_SCALE)
+    out[:, :, FEATURES.index("dwell_fine")] = _dwell(ep.t, angles, FINE_DEG)
+    out[:, :, FEATURES.index("angle_vel")] = _rate(ep.t, angles, HEAD_SPEED_SCALE)
     return out

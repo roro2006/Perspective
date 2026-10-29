@@ -206,3 +206,31 @@ What would change it:
 The critic as a **training signal** (phase 2) does not need a lead: it needs
 the wanted block named correctly (1.00 here) and few false alarms, both of
 which it meets in simulation.
+
+### Finer gaze features and a slow-and-ask operating point (T4-09)
+
+Six features that measure the head against the gripper instead of a 10 deg
+cone per block (how far the head has moved from the gripper toward each block,
+smoothed and as a rate; a 4 deg dwell; angle rates). Rerun, same split:
+
+| metric | critic (stop, 90% precision) | critic (slow and ask, 75%) | gaze rule | gate |
+|---|---|---|---|---|
+| precision | 0.92 | 0.77 | 0.84 | >= 0.90 |
+| recall | 0.97 | 0.97 | 0.97 | >= 0.70 |
+| false alarms on right reaches | 0.08 | 0.28 | 0.18 | |
+| lead_s | -0.05 | 0.35 | -0.21 | >= 0.4 |
+| names the wanted block | 1.00 | 1.00 | 1.00 | >= 0.85 |
+
+**Gate: still fails on lead time** (-0.14 s before the change, -0.05 s after).
+The slow-and-ask point warns 0.35 s before the "no", but slows 28% of right
+reaches too.
+
+What limits it: false alarms come mostly from the distracted family (22% of
+their right reaches at the stop threshold, against 4% for attentive): a glance
+at the other block of the pair looks like a deliberate look until it has lasted
+longer than a glance. A per-person threshold (scratch experiment, family used
+as a stand-in for knowing the person) gets attentive and slow people to about
+0.2 s of lead at 90% precision, but not the distracted ones, and 0.07 s
+overall. Under our reaction model, 0.4 s at 90% precision does not look
+reachable with any features of the head alone; what decides it is how real
+people time looking against speaking (phase 3).
