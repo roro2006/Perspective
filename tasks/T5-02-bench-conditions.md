@@ -1,7 +1,7 @@
 ---
 id: T5-02
 title: Grounding conditions (geometry, paired, robot-only)
-status: todo
+status: done
 agent: qwen
 depends: [T5-01]
 owns: [curio_robot/bench/conditions.py]
