@@ -9,6 +9,7 @@ concurrent stages, so nothing slow sits in front of the arm.
                 (target 2) grounder on the frame at the key word ──► GroundingReply
   motion        small IK steps toward the current goal ──► ArmEvent
   voice-out     TTS queue with barge-in
+  (target 3)    each tick, where the person's head points ──► GazeWatch ──► GazeCue
 
 Capture stays on the main thread because MuJoCo's GL context belongs to the
 thread that created it. The World itself makes capture safe against the arm."""
@@ -21,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from curio_robot.collab.gaze import GazeWatch, gaze_target
 from curio_robot.conventions.profiles import ProfileStore
 from curio_robot.episode_log import EpisodeLog
 from curio_robot.events import Event
@@ -29,7 +31,7 @@ from curio_robot.grounding.history import FrameHistory
 from curio_robot.perception import Detector
 from curio_robot.recorder import DecisionRecorder
 from curio_robot.runtime.motion import Motion
-from curio_robot.runtime.orchestrator import Orchestrator
+from curio_robot.runtime.orchestrator import GazeCue, Orchestrator
 from curio_robot.runtime.perception_stage import PerceptionStage
 from curio_robot.runtime.slot import Latest
 from curio_robot.runtime.trace import Tracer
@@ -49,6 +51,7 @@ class RuntimeConfig:
     profiles_dir: Path | None = None  # None: the belief lives in memory only
     decisions_path: Path | None = None  # None: decisions aren't recorded
     grounder: VllmGrounder | None = None  # target 2; None: the text VLM path only
+    implicit_feedback: bool = False  # target 3: a steady look at another reading re-targets
 
 
 class Runtime:
@@ -75,6 +78,7 @@ class Runtime:
         self.motion = Motion(world, self.bus.put, speed=self.config.arm_speed)
         cfg = self.config
         self.history = FrameHistory() if cfg.grounder is not None else None
+        self._gaze = GazeWatch() if cfg.implicit_feedback else None
         self.perception = PerceptionStage(
             self.frames, self.maps, detector, self.tracer,
             use_human_view=lambda: self.config.use_human_view,
@@ -102,6 +106,21 @@ class Runtime:
         self.perception.remember(frames, t0)
         self.frames.put(frames)
         self.tracer.frame("capture", (time.perf_counter() - t0) * 1000)
+        if self._gaze is not None:
+            self._watch_gaze(t0)
+
+    def _watch_gaze(self, t: float) -> None:
+        """Target 3: time the person's look against where the arm is going; the
+        orchestrator decides (on its own thread) whether the look means "not that"."""
+        _, object_map = self.maps.get()
+        if object_map is None or object_map.human_pose is None:
+            self._gaze.reset()
+            return
+        looking_at = gaze_target(object_map.human_pose, object_map)
+        fired = self._gaze.update(t, looking_at, self.brain.goal_id if self.brain.arm_active
+                                  else None)
+        if fired is not None:
+            self.bus.put(GazeCue(fired, t))
 
     def run(self, seconds: float, until: Callable[[], bool] | None = None) -> None:
         period = 1.0 / self.config.capture_hz
