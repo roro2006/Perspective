@@ -6,6 +6,7 @@
     uv run curio-sim live perspective --grounder-url http://127.0.0.1:8081/v1
     uv run curio-sim learn --user all --users 50 --noise --baseline
     uv run curio-sim learn --live --user robot-frame --requests 6
+    uv run curio-sim collab --tasks 5 --conditions view-off,view-on --user mixed --export out/dataset
 """
 
 from __future__ import annotations
@@ -74,6 +75,18 @@ def main(argv: list[str] | None = None) -> None:
                    help="latency budget, ms")
     g.add_argument("--out", type=Path, default=Path("out/eval/ground_eval.json"))
 
+    c = sub.add_parser("collab", help="run collaboration tasks per condition, print the scoreboard")
+    c.add_argument("--user", choices=["own-frame", "robot-frame", "mixed"], default="mixed")
+    c.add_argument("--tasks", type=int, default=5, help="seeds seed..seed+tasks-1 per condition")
+    c.add_argument("--goals", type=int, default=4)
+    c.add_argument("--conditions", default="view-off,view-on", help="comma-separated")
+    c.add_argument("--seed", type=int, default=0)
+    c.add_argument("--deictic", type=float, default=0.0, help="p_deictic")
+    c.add_argument("--occlude", action="store_true")
+    c.add_argument("--grounder-url", default=None)
+    c.add_argument("--out", type=Path, default=Path("out/collab"))
+    c.add_argument("--export", type=Path, default=None, help="write the dataset here")
+
     args = parser.parse_args(argv)
     if args.cmd == "shot":
         pane = tuple(int(v) for v in args.size.split("x"))
@@ -88,6 +101,8 @@ def main(argv: list[str] | None = None) -> None:
         _learn(args)
     elif args.cmd == "ground-eval":
         _ground_eval(args)
+    elif args.cmd == "collab":
+        _collab(args)
     else:
         result = ab.run(args.trials, args.seed, args.pose_noise, args.rot_noise)
         ab.save(result, args.out)
@@ -224,3 +239,44 @@ def _ground_eval(args) -> None:
         print(f"gate {'PASS' if ok else 'FAIL'}: {message}")
         if not ok:
             sys.exit(1)
+
+
+def _collab(args) -> None:
+    from curio_robot.collab.export import export_episodes
+    from curio_robot.collab.metrics import summarize
+    from curio_robot.collab.report import format_table
+    from curio_robot.collab.run import run_task
+    from curio_robot.collab.session import save_sessions
+    from curio_robot.sim.world import SimWorld
+
+    user = next(u for u in POPULATION if u.name == args.user)
+    conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]
+    world = SimWorld(320, 240)
+
+    sessions = []
+    for condition in conditions:
+        for seed in range(args.seed, args.seed + args.tasks):
+            session = run_task(
+                user, condition, seed,
+                n_goals=args.goals,
+                p_deictic=args.deictic,
+                occlude=args.occlude,
+                world=world,
+                grounder_url=args.grounder_url,
+                quiet=True,
+            )
+            sessions.append(session)
+            print(f"{condition} seed {seed}: {len(session.done)}/{len(session.goals)} goals, "
+                  f"{len(session.steps)} turns")
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    save_sessions(sessions, args.out / "sessions.jsonl")
+
+    summary = summarize(sessions)
+    (args.out / "summary.json").write_text(json.dumps(summary, indent=2))
+
+    print(format_table(summary))
+
+    if args.export:
+        counts = export_episodes(sessions, args.export, overwrite=True)
+        print(f"exported {args.export}: {counts}")
