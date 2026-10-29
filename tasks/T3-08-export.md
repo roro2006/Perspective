@@ -1,7 +1,7 @@
 ---
 id: T3-08
 title: Export sessions as a dataset
-status: todo
+status: doing
 agent: qwen
 depends: []
 owns: [curio_robot/collab/export.py]

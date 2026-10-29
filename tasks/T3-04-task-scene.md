@@ -1,7 +1,7 @@
 ---
 id: T3-04
 title: Multi-step fetch scene and its ground-truth map
-status: todo
+status: doing
 agent: qwen
 depends: []
 owns: [curio_robot/collab/tasks.py]

@@ -1,7 +1,7 @@
 ---
 id: T3-03
 title: Simulated person's goals and wording for a task
-status: todo
+status: doing
 agent: qwen
 depends: []
 owns: [curio_robot/collab/worker.py]

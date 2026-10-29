@@ -1,7 +1,7 @@
 ---
 id: T3-05
 title: Gaze target and dwell watcher
-status: todo
+status: doing
 agent: qwen
 depends: []
 owns: [curio_robot/collab/gaze.py]
