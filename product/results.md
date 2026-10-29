@@ -356,3 +356,33 @@ Likely fixes, in order: add the SO-101 wrist camera as the third view (the
 base model has three camera slots, and LeRobot SO-101 setups use one for
 exactly this); more and more varied demonstrations (out/demos300v is
 recorded); a shorter action chunk to match the 42-frame episodes.
+
+## End to end: grounding then SmolVLA (target 5, T5-09)
+
+200 requests on unseen scenes (40 each: "my left", "your left", "the left" +
+habit, colour only, free wording). Each setup puts the ring somewhere, then the
+same SmolVLA checkpoint (run 1) picks in closed loop. Run 2026-10-29, 19:30-19:48.
+
+| setup | ring on the right block | picked target | picked partner | nothing |
+|---|---|---|---|---|
+| words only (no ring) | - | 0.00 | 0.01 | 0.98 |
+| base grounder | 0.67 | 0.09 | 0.07 | 0.85 |
+| tuned grounder (LoRA) | 0.85 | 0.12 | 0.04 | 0.84 |
+| oracle ring | 1.00 | 0.14 | 0.00 | 0.86 |
+
+Ring accuracy by request: base my 0.78, your 0.40, habit 0.45, colour 1.00,
+free 0.70; tuned 0.97, 1.00, 0.70, 1.00, 0.57.
+
+What it shows:
+- **Without grounding the policy does nothing useful** (0 target picks in 200).
+- **Better grounding gives more correct picks and fewer wrong ones:** target
+  picks 0.09 -> 0.12 -> 0.14 and partner picks 0.07 -> 0.04 -> 0.00 from base to
+  tuned to oracle. The tuned grounder reaches 86% of the oracle's pick rate.
+- **The ceiling is the grasp,** not the grounding: even the oracle ring lifts the
+  target only 14% of the time (run 1 policy; see the previous section).
+- Free wording is the tuned grounder's weak kind (0.57 here, 0.64 on bench5b):
+  the LoRA never trained on it.
+
+Grounder scores on the extended benchmark (out/bench5b, 300 items), geometry
+condition: base 0.64 overall, tuned 0.87 (rule 0.84); hidden-pair tuned 0.92
+vs 0.74 from both images vs 0.00 robot-only; free wording tuned 0.64 vs rule 0.30.
