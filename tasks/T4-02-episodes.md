@@ -1,7 +1,7 @@
 ---
 id: T4-02
 title: Reaction episodes, generator and JSONL files
-status: todo
+status: done
 agent: qwen
 depends: [T4-01]
 owns: [curio_robot/critic/episodes.py]
