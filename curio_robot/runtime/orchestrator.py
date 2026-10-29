@@ -14,6 +14,9 @@ the arm and the voice do. This is where the pipelining happens:
                          fused with the belief; it may redirect or settle "that one".
                          A partial naming the object is scored early; the final
                          reuses that answer when it says the same thing
+  GazeCue             -> target 3: the person has been looking at another reading
+                         of the request while the arm moves; re-target and learn
+                         from it as from a "no", before they say it
 
 Every decision goes to the DecisionRecorder and every outcome (accepted,
 corrected, answered) updates the person's ConventionBelief (docs/target1-conventions.md)."""
@@ -115,6 +118,14 @@ class _Prefetch:
     frame: CameraFrame
     t: float  # when the frame was taken (perf_counter)
     future: Future
+
+
+@dataclass(frozen=True, slots=True)
+class GazeCue:
+    """Target 3: collab.gaze.GazeWatch fired, the person kept looking at this object."""
+
+    object_id: str
+    t: float  # perf_counter
 
 
 @dataclass(slots=True)
@@ -221,6 +232,8 @@ class Orchestrator:
             self._on_arm(event)
         elif isinstance(event, GroundingReply):
             self._on_grounding(event)
+        elif isinstance(event, GazeCue):
+            self._on_gaze(event)
 
     def _on_heard(self, e: Heard) -> None:
         if e.kind == "start":
@@ -576,6 +589,33 @@ class Orchestrator:
         if committed is not None and committed.chosen_id == wrong_id:
             self._learn(committed, "corrected", wrong_id, right_id, object_map)
         self.last_target = right_id
+
+    def _on_gaze(self, cue: GazeCue) -> None:
+        """A look counts only as a choice among the request's own readings, and
+        only while the arm is heading somewhere else for the current request:
+        a look at an unrelated object, or after the fact, changes nothing."""
+        committed = self._committed
+        if (
+            not self.arm_active
+            or self._interrupted
+            or committed is None
+            or committed.utterance != self.utterance
+            or cue.object_id == self.goal_id
+            or cue.object_id not in {r.object_id for r in committed.readings}
+        ):
+            return
+        _, object_map = self._maps.get()
+        obj = next((o for o in object_map.objects if o.object_id == cue.object_id), None) \
+            if object_map is not None else None
+        if obj is None:
+            return
+        self._tracer.mark(self.utterance, "gaze_redirected", cue.t)
+        if self._log:
+            self._log.event("gaze", utterance=self.utterance, object_id=cue.object_id,
+                            wrong=self.last_target)
+        color = cue.object_id.split("_")[0]
+        self._correct_to("(gaze)", cue.object_id, obj.position, object_map)
+        self._say(f"Oh, the {color} one you're looking at.")
 
     def _on_interrupt(self, i: Interrupt) -> None:
         self._interrupted = True

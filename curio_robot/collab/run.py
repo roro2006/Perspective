@@ -1,5 +1,5 @@
 """One simulated person does a whole fetch task with the live runtime; the run
-comes back as a Session. Task T3-06 (the "view-on+gaze" condition: T3-07).
+comes back as a Session. Task T3-06; the "view-on+gaze" condition, T3-07.
 
 One Runtime serves the whole task, so the belief learned on one request is
 used on the next, as in a real session. The person's lines come from one
@@ -30,6 +30,10 @@ from curio_robot.voice.scripted import PrintedVoice
 
 CONDITIONS = ("view-off", "view-on", "view-on+gaze")
 REACT_S = 0.3  # how long the person takes to see where the arm is going
+# How long after finishing a line the person takes to say "no" to a wrong pick.
+# They look at the one they meant first (they look at each goal as they ask for
+# it, in every condition), so with gaze feedback the robot can fix it in time.
+CORRECT_S = 0.9
 NEXT_S = 0.4  # pause after an accepted arrival before the next request
 MAX_CORRECTIONS = 2  # per goal; after that the person gives up on it
 GOAL_TIMEOUT_S = 20.0  # per goal; a stuck goal is given up rather than hung on
@@ -90,6 +94,8 @@ class _Person:
             return None  # still deciding (or the grounder is looking)
         chosen = self.chosen_now()
         if chosen != goal.object_id:
+            if now - self._wait_from < CORRECT_S:
+                return None  # still looking at the one they meant
             if self._corrections >= MAX_CORRECTIONS:
                 return self._next(done=False)
             self._corrections += 1
@@ -133,8 +139,7 @@ class _Person:
             self.said[-1].chosen_id = self.chosen_now()
             return None
         goal = self.goals[self._i]
-        if goal.deictic:
-            self.look = _position(self.truth, goal.object_id)
+        self.look = _position(self.truth, goal.object_id)  # people look at what they ask for
         return self._say("request", goal.text, goal)
 
 
@@ -167,8 +172,6 @@ def run_task(
     CONDITIONS."""
     if condition not in CONDITIONS:
         raise ValueError(f"unknown condition {condition!r}; one of {CONDITIONS}")
-    if condition == "view-on+gaze":
-        raise NotImplementedError("T3-07")
     rng = np.random.default_rng(seed)
     scene = fetch_scene(rng, occlude=occlude)
     truth = true_map(scene)
@@ -176,26 +179,28 @@ def run_task(
     world = world or SimWorld(320, 240)
     world.home()
     apply_scene(world, scene)
-    if goals[0].deictic:
-        world.set_human(scene.human_eye, _position(truth, goals[0].object_id))
+    world.set_human(scene.human_eye, _position(truth, goals[0].object_id))
 
     person = _Person(goals, user, truth, rng)
     on_say = None if quiet else (lambda text: print(f"  human: {text}"))
     voice_in = ReactiveVoice(goals[0].text, person.react, on_say=on_say)
+    mark_tts: list = []  # filled once the Runtime (and its tracer) exists, as in sim.live
     with tempfile.TemporaryDirectory() as tmp:
         rt = Runtime(
             world,
             SegmentationDetector(world.block_colors),
             voice_in=voice_in,
-            voice_out=PrintedVoice(quiet=quiet),
+            voice_out=PrintedVoice(on_start=lambda _: mark_tts and mark_tts[0](), quiet=quiet),
             config=RuntimeConfig(
                 use_human_view=condition != "view-off",
                 person=user.name,
                 profiles_dir=profiles_dir or Path(tmp),
                 grounder=VllmGrounder(grounder_url) if grounder_url else None,
+                implicit_feedback=condition == "view-on+gaze",
             ),
         )
         person.rt = rt
+        mark_tts.append(lambda: rt.tracer.mark(rt.brain.utterance, "tts_start"))
         t_start, t_end = _drive(rt, person, voice_in, world, scene.human_eye,
                                 deadline_s=GOAL_TIMEOUT_S * (n_goals + 1))
     return _session(person, rt, user, condition, scene.kind, seed, t_start, t_end)
