@@ -6,7 +6,7 @@ the two halves and the benchmark that joins them. Cards: `tasks/T5-xx`.
 
 ## 1. The benchmark (phase 1)
 Simulated scenes with the person's view and the robot's view rendered together,
-exact answers, and six request kinds (`curio_robot/bench/items.py`):
+exact answers, and seven request kinds (`curio_robot/bench/items.py`):
 
 | kind | scene | words | what it tests |
 |---|---|---|---|
@@ -16,10 +16,13 @@ exact answers, and six request kinds (`curio_robot/bench/items.py`):
 | hidden | box hides the target (a unique colour) from the robot | "Hand me the blue one" | objects only the person sees |
 | hidden-pair | box hides one block of a pair from the robot; its partner stays visible | "... on my left" / "... on your left" | hidden objects where the frame still matters |
 | free | same-colour pair | templated free wording (below) | wording a keyword rule cannot parse |
+| free-heldout | same-colour pair | free wording no training set uses (below) | phrasings the grounder never trained on |
 
 "hidden-pair" and "free" were added by T5-10 at the end of the kind list, so
 the first four kinds' items are byte-identical to the original benchmark for
 the same seed (`out/bench5` = the first 200 items of `out/bench5b`).
+"free-heldout" (T5-13) is appended after them in the same way: `out/bench5b` is
+byte for byte the first 300 items and 600 PNGs of `out/bench5c`.
 
 **hidden-pair**: the box is placed as for "hidden" (0.045 m from the target
 toward the robot camera), but in front of a random pair block; draws are
@@ -46,12 +49,37 @@ On seed 0 the no-VLM rule scores 0.30 on free (no answer on the 27 distance
 items, 15 of 23 side items right: it reads " my "/" your " and otherwise
 assumes the speaker).
 
+**free-heldout**: the second grounder LoRA (T5-06) trained on items drawn from
+the free templates, leads and nouns above, so its free score shows new scenes,
+not new phrasings. This kind has the same relations and exact-answer rules
+(side from a frame, nearest/farthest from the speaker or the robot, 0.02 m gap,
+frames must disagree) but its own wording, which shares no template, no free
+relation phrase, no lead word (pronouns aside) and no noun with free
+(`items.HELDOUT_TEMPLATES`, `HELDOUT_LEADS`, `HELDOUT_NOUNS`; tests check).
+Leads "Give me", "Please bring me", "I'd like", "Fetch me", "Would you pick up";
+nouns "piece", "brick", "square", "toy"; 18 templates:
+- side, speaker: "over on my left", "The ... on the left, from my point of view,
+  please", "that is more to the left for me", "on my left as I face you";
+- side, robot: "on the left from your side", "that sits to the left for you",
+  "on the robot's left", "on your left as you face me";
+- nearest: "nearest to where I am sitting", "that is closer to my seat",
+  "whichever ... is closer to the robot", "that is easiest for you to reach",
+  "right next to you";
+- farthest: "more distant from me", "that is harder for me to reach", "I want
+  the ... that is further from you", "that is more distant from the robot",
+  "that you would have to stretch for".
+
+`items.HELDOUT_KINDS` lists it, and `scripts/bench_lora_data.py` refuses any
+held-out kind, so no future grounder training can see this wording. On seed 0
+the rule scores 0.32 (23 side items, 16 right; 27 distance items, no answer).
+
 Each item stores the target block, whose frame the words meant, the target's
 table position and its pixel in the robot camera (what a policy is told).
 
 Rule scores (no VLM) on `out/bench5b` (50 per kind, seed 0): color 1.00,
 marked 1.00, habit 0.76, hidden 1.00, hidden-pair 1.00, free 0.30, overall
-0.84. The rule reads the exact map (it knows hidden blocks' positions), so
+0.84. On `out/bench5c` (the same plus 50 free-heldout): free-heldout
+0.32, overall 0.77. The rule reads the exact map (it knows hidden blocks' positions), so
 on hidden-pair it is an upper bound, not a competitor to robot-only.
 
 ## 2. Three ways to ground (phase 2)
