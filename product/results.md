@@ -518,3 +518,17 @@ What it shows:
 - Four things changed together (wrist view, more and more varied data, chunk
   length, 4x the training steps), so this does not measure the wrist camera on
   its own.
+
+## Held-out phrasing (T5-13)
+
+out/bench5c adds 50 "free-heldout" items whose templates, leads and nouns never
+appear in grounder training. Geometry condition:
+
+| kind | rule | old LoRA | LoRA v2 |
+|---|---|---|---|
+| free (training templates) | 0.30 | 0.64 | 0.90 |
+| free-heldout (unseen phrasing) | 0.32 | 0.56 | **0.80** |
+| overall (350) | 0.77 | 0.82 | 0.92 |
+
+The v2 gain mostly carries over to wording it never saw (0.90 -> 0.80 on new
+templates), so it learned the relations, not only the templates.
