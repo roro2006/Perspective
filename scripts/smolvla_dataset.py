@@ -7,8 +7,9 @@ Runs in the lerobot venv, not the project env:
 
 SmolVLA's base checkpoint was trained on observation.images.camera1..3, observation.state (6)
 and action (6), so the samples use those names: camera1 is the robot view with the target ring
-drawn on it (demos.draw_marker, at conversion time), camera2 the person's view, camera3 absent
-(the policy drops a missing camera). The task text is the spoken words. The last EVAL_FRACTION
+drawn on it (demos.draw_marker, at conversion time), camera2 the person's view, camera3 the
+wrist view when the recording has it (T5-12; no ring there: the ring is a robot-camera pixel),
+absent otherwise (the policy drops a missing camera). The task text is the spoken words. The last EVAL_FRACTION
 of episodes are held out for evaluation.
 
 Two ways to the same samples:
@@ -17,7 +18,7 @@ Two ways to the same samples:
   T5-07; installing them was not approved, so this path is written against lerobot 0.6.1's
   API but not yet run.
 - `CurioPickFrames` reads the demos folder directly and yields what LeRobotDataset would with
-  SmolVLA's delta_timestamps: one state, two images in [0, 1] CHW, a 50-step action chunk
+  SmolVLA's delta_timestamps: one state, two or three images in [0, 1] CHW, an action chunk
   padded with the last action plus action_is_pad, and the task. scripts/smolvla_train.py
   trains on it."""
 
@@ -46,7 +47,16 @@ EVAL_FRACTION = 0.1
 ROBOT_TYPE = "so101"
 STATE = "observation.state"
 ACTION = "action"
-CAMERA_KEYS = {"robot": "observation.images.camera1", "human": "observation.images.camera2"}
+CAMERA_KEYS = {
+    "robot": "observation.images.camera1",
+    "human": "observation.images.camera2",
+    demos.WRIST: "observation.images.camera3",
+}
+
+
+def cameras_of(info: dict) -> list[str]:
+    """The recording's cameras that become policy inputs, in CAMERA_KEYS order."""
+    return [c for c in CAMERA_KEYS if c in info.get("cameras", ["robot", "human"])]
 
 
 def split(n_episodes: int, eval_fraction: float = EVAL_FRACTION) -> tuple[list[int], list[int]]:
@@ -62,8 +72,7 @@ def features(info: dict) -> dict:
     return {
         STATE: {"dtype": "float32", "shape": (6,), "names": info["state_names"]},
         ACTION: {"dtype": "float32", "shape": (6,), "names": info["action_names"]},
-        CAMERA_KEYS["robot"]: dict(image),
-        CAMERA_KEYS["human"]: dict(image),
+        **{CAMERA_KEYS[c]: dict(image) for c in cameras_of(info)},
     }
 
 
@@ -73,10 +82,12 @@ class CurioPickFrames(torch.utils.data.Dataset):
     Joint data is loaded up front (small); PNGs are read per sample, so DataLoader workers
     share the decoding."""
 
-    def __init__(self, demos_dir: Path, episodes: list[int], chunk: int, marker: str = "start"):
+    def __init__(self, demos_dir: Path, episodes: list[int], chunk: int, marker: str = "start",
+                 cameras: list[str] | None = None):
         self.demos_dir = Path(demos_dir)
         self.chunk = chunk
         self.marker = marker
+        self.cameras = cameras or cameras_of(demos.load_info(self.demos_dir))
         self.episodes = [demos.load_episode(self.demos_dir, i) for i in episodes]
         self.index = [(e, f) for e, ep in enumerate(self.episodes) for f in range(len(ep["frames"]))]
 
@@ -93,17 +104,18 @@ class CurioPickFrames(torch.utils.data.Dataset):
         frame = frames[f]
         steps = np.arange(f, f + self.chunk)
         actions = np.asarray([frames[min(s, len(frames) - 1)]["action"] for s in steps], np.float32)
-        robot = demos.draw_marker(self._image(frame["images"]["robot"]),
-                                  demos.marker_uv(ep["episode"], frame, self.marker))
-        human = self._image(frame["images"]["human"])
-        return {
+        sample = {
             STATE: torch.tensor(frame["state"], dtype=torch.float32),
             ACTION: torch.from_numpy(actions),
             "action_is_pad": torch.from_numpy(steps >= len(frames)),
-            CAMERA_KEYS["robot"]: _chw(robot),
-            CAMERA_KEYS["human"]: _chw(human),
             "task": ep["episode"]["words"],
         }
+        for cam in self.cameras:
+            rgb = self._image(frame["images"][cam])
+            if cam == "robot":
+                rgb = demos.draw_marker(rgb, demos.marker_uv(ep["episode"], frame, self.marker))
+            sample[CAMERA_KEYS[cam]] = _chw(rgb)
+        return sample
 
     def stats(self) -> dict[str, dict[str, torch.Tensor]]:
         """Mean/std/min/max of state and action over these episodes (for the normalizer)."""
@@ -129,6 +141,7 @@ def convert(demos_dir: Path, root: Path, marker: str, overwrite: bool) -> dict:
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     info = demos.load_info(demos_dir)
+    cameras = cameras_of(info)
     if root.exists():
         if not overwrite:
             raise FileExistsError(f"{root} exists; pass --overwrite")
@@ -144,11 +157,12 @@ def convert(demos_dir: Path, root: Path, marker: str, overwrite: bool) -> dict:
             meta = ep["episode"]
             for frame in ep["frames"]:
                 uv = demos.marker_uv(meta, frame, marker)
+                images = {CAMERA_KEYS[c]: frame[f"{c}_rgb"] for c in cameras}
+                images[CAMERA_KEYS["robot"]] = demos.draw_marker(frame["robot_rgb"], uv)
                 dataset.add_frame({
                     STATE: np.asarray(frame["state"], np.float32),
                     ACTION: np.asarray(frame["action"], np.float32),
-                    CAMERA_KEYS["robot"]: demos.draw_marker(frame["robot_rgb"], uv),
-                    CAMERA_KEYS["human"]: frame["human_rgb"],
+                    **images,
                     "task": meta["words"],
                 })
             dataset.save_episode()

@@ -16,7 +16,8 @@ Each scene and target is rolled out under every condition:
 - words: no ring, words only (can the policy resolve the person's "left" itself?);
 - swapped: ring on the pair partner, words name the target (ring or words?).
 
-Timing follows the recordings: observe at 10 Hz (robot image + ring, person image, 6 joints),
+Timing follows the recordings: observe at 10 Hz (robot image + ring, person image, the wrist
+image when the checkpoint was trained with camera3 (T5-12, demos.render_wrist), 6 joints),
 ask the policy, and let each action cover the 0.1 s a demo action covered (5 control ticks of
 20 ms). Within those ticks the ctrl ramps linearly from the previous action, as the expert's
 ctrl did (--ctrl hold: constant instead). Actions come from policy.select_action, so a chunk of
@@ -57,7 +58,11 @@ MAX_SEED_TRIES = 20  # per trial, for the rare scene whose ring pixel is off the
 # Feature names as in smolvla_dataset (which imports torch, so it loads only after the GPU
 # env vars are set; load_policy checks the two agree).
 STATE = "observation.state"
-CAMERA_KEYS = {"robot": "observation.images.camera1", "human": "observation.images.camera2"}
+CAMERA_KEYS = {
+    "robot": "observation.images.camera1",
+    "human": "observation.images.camera2",
+    demos.WRIST: "observation.images.camera3",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,19 +122,26 @@ def load_policy(checkpoint: Path, device: str, n_action_steps: int | None):
     return policy, pre, post, image_hw
 
 
-def _observe(world: PhysWorld, ring: tuple[float, float] | None, words: str):
-    """The policy input at this instant, and the camera1 image it saw (for PNGs)."""
+def policy_cameras(policy) -> list[str]:
+    """The demos cameras this policy takes, from its input features (run 1 has no wrist)."""
+    return [c for c, key in CAMERA_KEYS.items() if key in policy.config.input_features]
+
+
+def _observe(world: PhysWorld, ring: tuple[float, float] | None, words: str,
+             cameras: list[str]):
+    """The policy input at this instant, and the images it saw (camera1 with its ring)."""
     import torch
 
-    robot = demos.draw_marker(world.render_camera(ROBOT_CAM).rgb, ring)
-    human = world.render_camera(HUMAN_CAM).rgb
+    images = {"robot": demos.draw_marker(world.render_camera(ROBOT_CAM).rgb, ring),
+              "human": world.render_camera(HUMAN_CAM).rgb}
+    if demos.WRIST in cameras:
+        images[demos.WRIST] = demos.render_wrist(world)
     batch = {
         STATE: torch.tensor(world.arm_qpos(), dtype=torch.float32)[None],
-        CAMERA_KEYS["robot"]: _chw(robot)[None],
-        CAMERA_KEYS["human"]: _chw(human)[None],
+        **{CAMERA_KEYS[c]: _chw(images[c])[None] for c in cameras},
         "task": [words],
     }
-    return batch, robot, human
+    return batch, images
 
 
 class _Lifts:
@@ -156,6 +168,7 @@ def rollout(world: PhysWorld, model, trial: Trial, condition: str, horizon: floa
     import torch
 
     policy, pre, post = model
+    cameras = policy_cameras(policy)
     world.reset(trial.scene)
     ring_block = {"target": trial.target, "partner": trial.partner}.get(CONDITIONS[condition])
     ring = None if ring_block is None else demos.target_pixel(
@@ -168,9 +181,9 @@ def rollout(world: PhysWorld, model, trial: Trial, condition: str, horizon: floa
     max_target_z = BLOCK_HALF
     n_frames = round(horizon * demos.FPS)
     for f in range(n_frames):
-        batch, robot, human = _observe(world, ring, trial.words)
+        batch, images = _observe(world, ring, trial.words, cameras)
         if frames_dir is not None and f % FRAME_EVERY == 0:
-            _save_frame(frames_dir / f"{condition}_{f:03d}.png", world, robot, human)
+            _save_frame(frames_dir / f"{condition}_{f:03d}.png", world, images)
         needs_model = len(policy._queues["action"]) == 0  # lerobot's chunk queue
         tq = time.perf_counter()
         with torch.inference_mode():
@@ -187,7 +200,7 @@ def rollout(world: PhysWorld, model, trial: Trial, condition: str, horizon: floa
         if lifts.picked is not None:
             break
     if frames_dir is not None:
-        _save_frame(frames_dir / f"{condition}_{f:03d}_end.png", world, robot, human)
+        _save_frame(frames_dir / f"{condition}_{f:03d}_end.png", world, images)
     return {
         "seed": trial.seed, "condition": condition, "words": trial.words,
         "target": trial.target, "partner": trial.partner,
@@ -217,10 +230,10 @@ def _chw(rgb: np.ndarray):
     return torch.from_numpy(np.ascontiguousarray(rgb.transpose(2, 0, 1))).float() / 255.0
 
 
-def _save_frame(path: Path, world: PhysWorld, robot: np.ndarray, human: np.ndarray) -> None:
-    """camera1 as the policy saw it | person camera | overview, side by side."""
+def _save_frame(path: Path, world: PhysWorld, images: dict[str, np.ndarray]) -> None:
+    """camera1 as the policy saw it | person camera | [wrist |] overview, side by side."""
     overview = world.render_camera("overview").rgb
-    Image.fromarray(np.concatenate([robot, human, overview], axis=1)).save(path)
+    Image.fromarray(np.concatenate([*images.values(), overview], axis=1)).save(path)
 
 
 def summarize(results: list[dict], conditions: list[str]) -> dict:
@@ -267,6 +280,7 @@ def evaluate(args: argparse.Namespace) -> dict:
         "checkpoint": str(args.checkpoint), "device": args.device, "seed": args.seed,
         "n": args.n, "horizon_s": args.horizon, "ctrl": args.ctrl,
         "n_action_steps": policy.config.n_action_steps, "chunk_size": policy.config.chunk_size,
+        "cameras": policy_cameras(policy),
         "torch_threads": torch.get_num_threads(), "load_s": round(load_s, 1),
         "summary": summarize(results, args.conditions), "rollouts": results,
     }

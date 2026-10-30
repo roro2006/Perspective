@@ -11,11 +11,13 @@ from curio_robot.sim.demos import (
     FPS,
     MARKER_COLOUR,
     MARKER_MODES,
+    WRIST,
     draw_marker,
     load_episode,
     load_info,
     marker_uv,
     record,
+    render_wrist,
     words_for,
 )
 from curio_robot.sim.physics import ARM_JOINTS
@@ -69,7 +71,7 @@ def test_every_frame_has_every_field(recording):
             assert frame["words"] == meta["words"]
             uv = frame["target_pixel"]
             assert uv is None or (len(uv) == 2 and 0 <= uv[0] < W and 0 <= uv[1] < H)
-            for cam in ("robot", "human"):
+            for cam in ("robot", "human", WRIST):
                 assert (out / frame["images"][cam]).exists()
                 assert frame[f"{cam}_rgb"].shape == (H, W, 3)
         assert frames[0]["target_pixel"] is not None  # the target starts in view
@@ -140,3 +142,33 @@ def test_varied_words_keep_the_target_and_vary_the_wording():
             assert (frame is None) == (i == 4)  # block 4 is the unique colour
             texts.add(text.split(" the ")[0] + ("|your" if " your " in text else ""))
     assert {"Hand me", "Hand me|your"} <= texts and len(texts) >= 4
+
+
+def test_info_lists_the_wrist_camera(recording):
+    out, _ = recording
+    assert load_info(out)["cameras"] == ["robot", "human", WRIST]
+
+
+def test_without_wrist_the_folder_has_two_cameras(tmp_path):
+    record(1, seed=0, out_dir=tmp_path, width=W, height=H, wrist=False)
+    assert load_info(tmp_path)["cameras"] == ["robot", "human"]
+    frame = load_episode(tmp_path, 0, images=True)["frames"][0]
+    assert set(frame["images"]) == {"robot", "human"} and f"{WRIST}_rgb" not in frame
+
+
+def test_wrist_view_sees_the_jaw_and_keeps_the_near_plane():
+    from curio_robot.collab.tasks import fetch_scene
+    from curio_robot.sim.physics import PhysWorld
+
+    with PhysWorld(W, H) as world:
+        world.reset(fetch_scene(np.random.default_rng(0)))
+        znear = world.model.vis.map.znear
+        robot_before = world.render_camera("robot").rgb
+        rgb = render_wrist(world)
+        assert world.model.vis.map.znear == znear  # restored for the other cameras
+        assert np.array_equal(world.render_camera("robot").rgb, robot_before)
+    assert rgb.shape == (H, W, 3)
+    # The yellow fixed jaw fills part of the bottom of the view (red and green high, blue low).
+    bottom = rgb[H // 2:].astype(int)
+    jaw = (bottom[..., 0] > 100) & (bottom[..., 1] > 80) & (bottom[..., 2] < 60)
+    assert jaw.mean() > 0.02

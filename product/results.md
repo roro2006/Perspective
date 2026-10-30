@@ -459,3 +459,62 @@ What it shows:
   far below geometry.
 - Deictic should be won back before v2 replaces the old adapter in the live
   pipeline (more deictic rows in the mix, then a fresh check).
+
+## SmolVLA run 2, wrist camera (T5-12)
+
+Run 1 followed the ring but rarely closed the grasp. Run 2 changes four things
+at once: the SO-101 wrist camera as a third view (camera3, no ring), 400 new
+demonstrations with varied wording ("my", "your", "the" side words and free
+wording; out/demos400w, seeds 3000+, 360 train / 40 held out), a 30-step action
+chunk re-planned every 10 steps (run 1: 50 and 50), and bf16 autocast. That made
+training about 5x faster (0.86 s/step), so it ran 10,000 steps at batch 32 (21
+epochs) in 2.5 h on the RX 7900 XT. Held-out loss went from 0.22 at step 500 to
+0.078, with little change after step 7,500. Run 2026-10-29/30. Same T5-08
+evaluation as run 1: 50 unseen scenes, default settings, final checkpoint.
+
+| condition | run 1: target | run 1: partner | **run 2: target** | **run 2: partner** | run 2: other | run 2: nothing |
+|---|---|---|---|---|---|---|
+| ring on target, words name it | 0.12 | 0.00 | **0.36** | 0.00 | 0.00 | 0.64 |
+| words only, no ring | 0.02 | 0.02 | 0.02 | 0.04 | 0.04 | 0.90 |
+| ring on partner, words name target | 0.00 | 0.14 | 0.00 | **0.44** | 0.00 | 0.56 |
+
+**Gate (fixed before training): FAIL**, on the first line:
+- ring on target: target picks 0.36 against a bar of 0.40. Not met (run 1: 0.12).
+- ring on partner: partner picks 0.44 > target picks 0.00. Met.
+- words only: target picks 0.02, below 0.36. Met.
+
+Not gated, run after the gated evaluation: the same checkpoint with 30 actions
+per call (one open-loop chunk, `--n-action-steps 30`) scores 0.40 / 0.02 / 0.46
+partner. The difference from 0.36 is two scenes out of 50 (standard error about
+0.07), so the evidence does not favour either setting, and the gate is scored at
+the default setting it named.
+
+End to end, on the same 200 trials and grounder choices as T5-09 and T5-06,
+with the run-2 policy (out/e2e/run2):
+
+| setup | ring on the right block | run 1: target | **run 2: target** | run 2: partner | run 2: nothing |
+|---|---|---|---|---|---|
+| words only (no ring) | - | 0.00 | 0.01 | 0.01 | 0.96 |
+| retrained grounder (LoRA v2) | 0.95 | 0.14 | **0.42** | 0.01 | 0.57 |
+| oracle ring | 1.00 | 0.14 | **0.44** | 0.00 | 0.56 |
+
+Target picks by request, LoRA v2 / oracle: my 0.38 / 0.38, your 0.45 / 0.45,
+habit 0.17 / 0.28, colour 0.55 / 0.53, free 0.55 / 0.57.
+
+What it shows:
+- **The grasp is about three times as good, but it is still the bottleneck.**
+  Target picks with the ring rose from 0.12 to 0.36 on the T5-08 scenes and from
+  0.14 to 0.44 end to end (oracle). In most failures the arm reaches the ringed
+  block and closes just short of it or beside it: in 19 of the 32 failed
+  ring-on-target rollouts the target moved more than 5 mm but was not lifted
+  (run 1: 8 of 44).
+- **The ring still decides, not the words.** With the ring on the partner the
+  policy picks the partner 44% of the time and never the named target. Without a
+  ring it almost never picks anything (0.02), even though it was trained on the
+  run-time wording.
+- **Grounding is no longer what limits the pipeline.** The LoRA v2 ring reaches
+  95% of the oracle's target picks (0.42 against 0.44). The only clear gap is
+  habit (0.17 against 0.28), where the grounder's ring is right 78% of the time.
+- Four things changed together (wrist view, more and more varied data, chunk
+  length, 4x the training steps), so this does not measure the wrist camera on
+  its own.

@@ -110,6 +110,30 @@ on those demonstrations, conditioned on the target point.
           --out out/smolvla/run1 --steps 2500 --batch-size 32 --workers 4
           --log-freq 25 --eval-freq 250 --save-freq 500   # --resume to continue
 
+- **Run 2 (T5-12): wrist camera, varied wording.** Recordings now store the
+  SO-101 `wrist_cam` image per frame (`demos.record(wrist=True)`, the default;
+  `demos.render_wrist` lowers the near clip to 5 mm for that render only, since
+  the scene default of 8 cm cut away the jaws). camera3 = wrist view, no ring.
+  Data `out/demos400w`: seeds 3000+, `--words varied`, 400 successes in 407
+  attempts, 16,800 frames, 1.5 GB, 5.6 min; episodes 360-399 held out.
+  Training: `--chunk-size 30 --n-action-steps 10` (a 3 s chunk fits the 4.1 s
+  episodes, and re-planning every 1 s lets the wrist view correct the grasp;
+  the expert has no per-position weights, so a shorter chunk works with the
+  pretrained expert) and `--amp bf16` (0.86 s/step against 4.2 s in fp32 for
+  run 1, 10.1 GB peak; loss in line with run 1. An fp32 smoke with three
+  cameras gave NaN losses, but it ran while a stuck process held 9 GB of
+  VRAM, so it is not a clean test). 10,000 steps at batch 32 in 2.5 h;
+  held-out loss 0.078 (run 1: 0.17). Ring-on-target picks 0.36 (run 1: 0.12),
+  just under the T5-12 gate of 0.40; see product/results.md.
+  The trainer frees GPU memory (`torch.cuda.empty_cache`) and terminates
+  itself after the final checkpoint: without that, the process hung in
+  driver teardown and kept its VRAM.
+
+      <lerobot venv>/python scripts/smolvla_train.py --demos out/demos400w
+          --out out/smolvla/run2 --steps 10000 --batch-size 32 --workers 4
+          --log-freq 50 --eval-freq 500 --save-freq 2000
+          --chunk-size 30 --n-action-steps 10 --amp bf16
+
 ### Evaluation (T5-08)
 `scripts/smolvla_eval.py` (lerobot venv) rolls a checkpoint out in closed loop
 in `PhysWorld`, on scenes it never trained on.
