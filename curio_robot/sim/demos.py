@@ -39,13 +39,32 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+import mujoco
 import numpy as np
 from PIL import Image
 
 from curio_robot import perspective
 from curio_robot.collab.tasks import TaskScene, fetch_scene, true_map
 from curio_robot.geometry import project
-from curio_robot.sim.expert import CONTROL_DT, pick
+from curio_robot.sim.expert import (
+    APPROACH,
+    CONTROL_DT,
+    DESCENT_SPEED,
+    GRASP_POINT,
+    HOLD_TIME,
+    IK_POS_TOL,
+    JAW_CLOSED,
+    LIFT_HEIGHT,
+    LIFT_SPEED,
+    N_ARM,
+    SUBSTEPS,
+    Grasp,
+    _along,
+    _Ik,
+    _smooth,
+    pick,
+    plan_grasp,
+)
 from curio_robot.sim.physics import ARM_JOINTS, PhysWorld
 from curio_robot.types import HUMAN_CAM, ROBOT_CAM, CameraFrame
 
@@ -63,6 +82,12 @@ MARKER_MODES = ("start", "track")
 WRIST_CAM = "wrist_cam"  # camera name in so101.xml; images are stored under "wrist"
 WRIST = "wrist"
 WRIST_ZNEAR_M = 0.005  # near clip for the wrist view: the fixed jaw is about 3 cm away
+
+# Recovery demos (T5-15): run 2's misses put the grasp point 1-2.6 cm off along the closing
+# axis, the fixed jaw resting on the block; these start the same way, then recover.
+RECOVERY_OFFSET_M = (0.010, 0.025)  # grasp point off along the closing axis, uniform
+RECOVERY_FIXED_JAW_SHARE = 0.75  # offsets towards the fixed jaw (the side run 2 missed on)
+RECOVERY_CLOSE_SHARE = 0.5  # recoveries that first close where they landed
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,10 +233,103 @@ def _observe(world: PhysWorld, i: int, wrist: bool) -> _Frame:
                   render_wrist(world) if wrist else None)
 
 
+def _shifted_path(world: PhysWorld, grasp: Grasp, offset: float) -> np.ndarray | None:
+    """grasp's path with the grasp point moved offset (m) along the jaw closing axis, the
+    gripper turned as before; None if the IK misses any pose by more than IK_POS_TOL."""
+    ik = _Ik(world)
+    shifted = []
+    for pose in grasp.path:
+        ik.data.qpos[:N_ARM] = pose.q
+        mujoco.mj_kinematics(ik.model, ik.data)
+        r = ik.data.xmat[ik.body].reshape(3, 3).copy()
+        point = ik.data.xpos[ik.body] + r @ GRASP_POINT
+        q, err, _ = ik.solve(point + r[:, 0] * offset, r, pose.q)
+        if err > IK_POS_TOL:
+            return None
+        shifted.append(q)
+    return np.array(shifted)
+
+
+def _plain(result) -> tuple[bool, str]:
+    return result.success, result.reason
+
+
+def _recovery_pick(
+    world: PhysWorld, i: int, rng: np.random.Generator, on_tick
+) -> tuple[bool, str, int]:
+    """A pick that first goes down beside the block, as run 2's misses did, then recovers.
+
+    The jaws descend with the grasp point RECOVERY_OFFSET_M off along the closing axis,
+    mostly towards the fixed jaw (which then lands on the block), sometimes close there,
+    then open, rise, move over the true pre-grasp and finish as expert.pick does. Plans the
+    expert can't shift (vias, the high stage, IK misses) run as plain picks. Returns
+    (success, reason, control ticks of the off-target part)."""
+    grasp = plan_grasp(world, i)
+    shifted = None
+    if grasp is not None and not grasp.vias and grasp.height == APPROACH:
+        sign = 1.0 if rng.random() < RECOVERY_FIXED_JAW_SHARE else -1.0
+        shifted = _shifted_path(world, grasp, sign * rng.uniform(*RECOVERY_OFFSET_M))
+    if shifted is None:
+        return (*_plain(pick(world, i, on_tick)), 0)
+    path = np.array([pose.q for pose in grasp.path])
+    ticks = 0
+
+    def tick(ctrl: np.ndarray) -> None:
+        nonlocal ticks
+        ticks += 1
+        world.step(ctrl, SUBSTEPS)
+        on_tick(world, world.ctrl())
+
+    def ramp(target: np.ndarray, seconds: float, jaw: float) -> None:
+        start = world.ctrl()
+        goal = np.append(target, jaw)
+        n = max(1, round(seconds / CONTROL_DT))
+        for t in range(1, n + 1):
+            tick(start + (goal - start) * _smooth(t / n))
+
+    def vertical(p: np.ndarray, down: bool, seconds: float, jaw: float) -> None:
+        n = max(1, round(seconds / CONTROL_DT))
+        for t in range(1, n + 1):
+            s = _smooth(t / n)
+            tick(np.append(_along(p, 1 - s if down else s), jaw))
+
+    def hold(seconds: float) -> None:
+        for _ in range(round(seconds / CONTROL_DT)):
+            tick(world.ctrl())
+
+    descend = APPROACH / DESCENT_SPEED
+    ramp(shifted[-1], 1.2, grasp.jaw)
+    hold(0.2)
+    vertical(shifted, True, descend, grasp.jaw)
+    hold(0.2)
+    if rng.random() < RECOVERY_CLOSE_SHARE:  # closed where it landed, as run 2 often did
+        ramp(world.ctrl()[:N_ARM], 0.3, JAW_CLOSED)
+        hold(0.1)
+    off_target = ticks
+    ramp(world.ctrl()[:N_ARM], 0.2, grasp.jaw)  # recovery: open, rise, re-centre
+    vertical(shifted, False, descend, grasp.jaw)
+    ramp(grasp.above.q, 0.6, grasp.jaw)
+    hold(0.2)
+    vertical(path, True, descend, grasp.jaw)
+    hold(0.2)
+    ramp(grasp.at.q, 0.3, JAW_CLOSED)
+    hold(0.2)
+    vertical(path, False, APPROACH / LIFT_SPEED, JAW_CLOSED)
+    hold(0.1)
+    if not world.lifted(i, LIFT_HEIGHT):
+        return False, "not lifted", off_target
+    hold(HOLD_TIME)
+    if not world.lifted(i, LIFT_HEIGHT):
+        return False, "dropped", off_target
+    return True, "", off_target
+
+
 def _run_episode(
-    world: PhysWorld, scene: TaskScene, i: int, wrist: bool = True
-) -> tuple[bool, str, list[_Frame], list[np.ndarray]]:
-    """Reset to scene, pick block i, return (success, reason, frames, actions)."""
+    world: PhysWorld, scene: TaskScene, i: int, wrist: bool = True,
+    recovery: np.random.Generator | None = None,
+) -> tuple[bool, str, list[_Frame], list[np.ndarray], int]:
+    """Reset to scene, pick block i (with recovery, a _recovery_pick using that generator),
+    return (success, reason, frames, actions, frames not to train on: the first ones)."""
     world.reset(scene)
     frames = [_observe(world, i, wrist)]
     actions: list[np.ndarray] = []
@@ -224,9 +342,14 @@ def _run_episode(
             actions.append(ctrl.copy())
             frames.append(_observe(w, i, wrist))
 
-    result = pick(world, i, on_tick)
+    if recovery is None:
+        success, reason = _plain(pick(world, i, on_tick))
+        off_ticks = 0
+    else:
+        success, reason, off_ticks = _recovery_pick(world, i, recovery, on_tick)
     actions.append(world.ctrl())  # the last frame holds
-    return result.success, result.reason, frames, actions
+    # Frame f's action is the ctrl after tick 5(f+1): skip frames whose action is off target.
+    return success, reason, frames, actions, off_ticks // TICKS_PER_FRAME
 
 
 def _episode_seed_and_target(seed: int, attempt: int) -> tuple[int, TaskScene, int]:
@@ -247,7 +370,8 @@ def _prepare(out_dir: Path, overwrite: bool) -> None:
 
 
 def _write_episode(
-    out_dir: Path, index: int, words: str, frames: list[_Frame], actions: list[np.ndarray]
+    out_dir: Path, index: int, words: str, frames: list[_Frame], actions: list[np.ndarray],
+    skip: int = 0,
 ) -> None:
     images = out_dir / "images" / f"episode_{index:06d}"
     images.mkdir(parents=True, exist_ok=True)
@@ -271,6 +395,8 @@ def _write_episode(
                 "words": words,
                 "images": paths,
             }
+            if skip:  # recovery episodes only, so older folders read the same
+                rec["train"] = k >= skip
             f.write(json.dumps(rec) + "\n")
 
 
@@ -284,6 +410,7 @@ def record(
     overwrite: bool = False,
     words: str = "fixed",
     wrist: bool = True,
+    recovery: float = 0.0,
 ) -> dict:
     """Record n_episodes expert picks into out_dir.
 
@@ -293,6 +420,8 @@ def record(
     n_episodes attempts) unless include_failed, when they are kept with
     "success": false. FileExistsError if meta/info.json exists and not
     overwrite. With wrist, every frame also stores the wrist camera image ("wrist").
+    A share `recovery` of attempts (drawn from default_rng([episode seed, 11])) are
+    recovery picks (_recovery_pick); their off-target frames carry "train": false.
     Returns {"episodes", "frames", "attempts", "successes", "failed"}."""
     out_dir = Path(out_dir)
     _prepare(out_dir, overwrite)
@@ -303,7 +432,10 @@ def record(
         while len(episodes) < n_episodes and attempts < MAX_ATTEMPTS_PER_EPISODE * n_episodes:
             episode_seed, scene, i = _episode_seed_and_target(seed, attempts)
             attempts += 1
-            success, reason, frames, actions = _run_episode(world, scene, i, wrist)
+            rng = np.random.default_rng([episode_seed, 11])
+            recover = rng if rng.random() < recovery else None
+            success, reason, frames, actions, skip = _run_episode(
+                world, scene, i, wrist, recover)
             successes += success
             if not success and not include_failed:
                 continue
@@ -312,7 +444,7 @@ def record(
                 text, frame = words_varied(scene, i, np.random.default_rng([episode_seed, 7]))
             else:
                 text, frame = words_for(scene, i)
-            _write_episode(out_dir, index, text, frames, actions)
+            _write_episode(out_dir, index, text, frames, actions, skip)
             total_frames += len(frames)
             episodes.append({
                 "episode_index": index,
@@ -326,6 +458,8 @@ def record(
                 "success": success,
                 "reason": reason,
                 "length": len(frames),
+                **({"recovery": recover is not None, "skipped_frames": skip}
+                   if recovery else {}),
             })
     finally:
         world.close()
@@ -344,6 +478,7 @@ def record(
         "total_frames": total_frames,
         "seed": seed,
         "include_failed": include_failed,
+        "recovery": recovery,
     }
     (out_dir / "meta" / "info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
     return {

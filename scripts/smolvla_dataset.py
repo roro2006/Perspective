@@ -89,7 +89,9 @@ class CurioPickFrames(torch.utils.data.Dataset):
         self.marker = marker
         self.cameras = cameras or cameras_of(demos.load_info(self.demos_dir))
         self.episodes = [demos.load_episode(self.demos_dir, i) for i in episodes]
-        self.index = [(e, f) for e, ep in enumerate(self.episodes) for f in range(len(ep["frames"]))]
+        # Recovery demos (T5-15) mark their off-target opening frames "train": false.
+        self.index = [(e, f) for e, ep in enumerate(self.episodes)
+                      for f, fr in enumerate(ep["frames"]) if fr.get("train", True)]
 
     def __len__(self) -> int:
         return len(self.index)
