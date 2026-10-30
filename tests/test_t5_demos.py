@@ -172,3 +172,18 @@ def test_wrist_view_sees_the_jaw_and_keeps_the_near_plane():
     bottom = rgb[H // 2:].astype(int)
     jaw = (bottom[..., 0] > 100) & (bottom[..., 1] > 80) & (bottom[..., 2] < 60)
     assert jaw.mean() > 0.02
+
+
+def test_recovery_demos_mark_their_off_target_frames(tmp_path):
+    summary = record(2, seed=3000, out_dir=tmp_path, width=W, height=H, recovery=1.0, wrist=False)
+    assert summary["episodes"] == 2
+    assert load_info(tmp_path)["recovery"] == 1.0
+    for i in range(2):
+        ep = load_episode(tmp_path, i)
+        skip = ep["episode"]["skipped_frames"]
+        assert ep["episode"]["recovery"]
+        if skip:
+            flags = [f["train"] for f in ep["frames"]]
+            assert flags == [False] * skip + [True] * (len(flags) - skip)
+        else:  # a plan the expert can't shift runs as a plain pick
+            assert all("train" not in f for f in ep["frames"])

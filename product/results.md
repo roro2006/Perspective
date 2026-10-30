@@ -532,3 +532,55 @@ appear in grounder training. Geometry condition:
 
 The v2 gain mostly carries over to wording it never saw (0.90 -> 0.80 on new
 templates), so it learned the relations, not only the templates.
+
+## SmolVLA run 3, grasp accuracy (T5-15)
+
+Where run 2 missed: replaying 30 of its ring-on-target rollouts and logging the
+grasp point (expert.GRASP_POINT on the gripper) against the block at the first
+close command. In 19 misses, 14 closed with the grasp point 2.4-3.1 cm too high,
+and in 10 of those the fixed jaw was resting on the block (contact), with the
+shoulder still about 0.1 rad short of its command. All were 1-2.6 cm off along
+the closing axis, always towards the fixed jaw. Hits were within 5 mm. Timing
+was not the problem: hits and misses both close at frames 22-26. With 5 actions
+per call instead of 10, run 2 got worse (7/30 against 11/30), so more frequent
+replanning does not help without data that shows how to recover.
+
+Run 3 changes the data only: 800 demonstrations (out/demos800r, seeds 3000+, 834
+attempts, 34 expert failures skipped) of which 203 are recovery demos. Each
+recovery first descends with the grasp point 1-2.5 cm off along the closing axis
+(75% towards the fixed jaw), closes there half the time, then opens, rises,
+re-centres and picks. The off-target opening (4,850 frames) is stored but not
+trained on. That leaves 38,856 frames, 30,608 trained on. Same settings as run 2
+(wrist camera, chunk 30, 10 actions per call, bf16, batch 32), 12,000 steps in
+178 min. Held-out loss 0.058 (run 2: 0.078). Run 2026-10-30.
+
+T5-08 evaluation, 100 unseen scenes (seed 50000), final checkpoints. Run 2 was
+rerun on the same 100 scenes (ring on target only) for a like-for-like
+comparison:
+
+| condition | run 2 (50) | run 2 (100) | **run 3: target** | **run 3: partner** | run 3: other | run 3: nothing |
+|---|---|---|---|---|---|---|
+| ring on target, words name it | 0.36 | 0.42 | **0.45** | 0.00 | 0.00 | 0.55 |
+| words only, no ring | 0.02 | - | 0.00 | 0.01 | 0.01 | 0.98 |
+| ring on partner, words name target | 0.00 (partner 0.44) | - | 0.00 | **0.51** | 0.00 | 0.49 |
+
+**Gate (fixed before training): FAIL**, on the first line:
+- ring on target: target picks 0.45 against a bar of 0.55. Not met.
+- ring on partner: partner picks 0.51 > target picks 0.00. Met.
+- words only: target picks 0.00 < 0.45. Met.
+
+Against run 2 on the same scenes, 0.42 -> 0.45 is 3 scenes out of 100 (standard
+error about 0.05): no real gain. The diagnosis on run 3 (same 30 scenes: 15
+hits against 11) shows the failure changed shape. Landings on the block fell (3
+of 15 misses against 10 of 19), and the policy now retries (10 rollouts close
+more than once, against 6). But it mostly closes in mid-air, 4-6 cm above the
+block, and only 1 retry ended in a pick. The recovery demos taught "close, open,
+go again" more than "close only when the block is between the jaws".
+
+End to end, same 200 trials and grounder choices as run 2 (out/e2e/run3):
+
+| setup | grounding | run 2: target | **run 3: target** | run 3: partner | run 3: nothing |
+|---|---|---|---|---|---|
+| words (no ring) | - | 0.01 | 0.01 | 0.01 | 0.96 |
+| lora2 grounder | 0.945 | 0.42 | **0.46** | 0.02 | 0.52 |
+| oracle ring | 1.00 | 0.44 | **0.49** | 0.00 | 0.51 |
