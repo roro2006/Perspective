@@ -1,7 +1,7 @@
 ---
 id: T5-06
 title: Retrain the grounding LoRA on benchmark-style data and score phase 2
-status: todo
+status: done
 agent: claude
 depends: [T5-03]
 owns: [scripts/train_lora.py, scripts/bench_lora_data.py, tests/test_t5_lora_data.py, product/results.md]
