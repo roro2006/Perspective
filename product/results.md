@@ -386,3 +386,76 @@ What it shows:
 Grounder scores on the extended benchmark (out/bench5b, 300 items), geometry
 condition: base 0.64 overall, tuned 0.87 (rule 0.84); hidden-pair tuned 0.92
 vs 0.74 from both images vs 0.00 robot-only; free wording tuned 0.64 vs rule 0.30.
+
+## Grounder retrained on free wording and hidden pairs (T5-06)
+
+The target-2 LoRA never saw free wording, so a second adapter (r16 v2) was trained
+from the base Qwen3-VL-4B on benchmark items rendered as the geometry request, the
+same request the live pipeline sends (`scripts/bench_lora_data.py`). Data: 4,038
+examples, 3,438 from benchmark seeds 11-19 (free 1,008, hidden-pair 810, marked
+504, habit 504, colour 306, hidden 306) plus 600 deictic rows from the target-2 set
+so "that one" stays in. None share an image with bench5b (seed 0) and none come
+from the e2e seeds (70000+). 3,589 train, 449 held out by id hash. Same settings
+as the first adapter (r=16 on q/k/v/o, lr 2e-4, 3 epochs, accumulation 16): 675
+steps in 56 minutes on the RX 7900 XT. Loss went from 1.47 to 0.13 and held-out
+accuracy from 0.80 to 0.87 to 0.89 over the three epochs. Served as
+`curio-ground-r16-v2-f16.gguf` on a fresh llama-server. Run 2026-10-29.
+
+The gate was set before training: in the geometry condition on out/bench5b, free
+>= 0.80, no other kind more than 0.03 below the old adapter, and p50 latency
+within +10%. Paired and robot-only are reported but not gated.
+
+| kind | n | old: geometry | **new: geometry** | old: paired | new: paired | old: robot-only | new: robot-only |
+|---|---|---|---|---|---|---|---|
+| color | 50 | 1.00 | **1.00** | 1.00 | 1.00 | 0.86 | 0.86 |
+| marked | 50 | 0.94 | **1.00** | 0.62 | 0.86 | 0.38 | 0.62 |
+| habit | 50 | 0.70 | **0.72** | 0.54 | 0.50 | 0.50 | 0.38 |
+| hidden | 50 | 1.00 | **1.00** | 1.00 | 1.00 | 0.00 | 0.00 |
+| hidden-pair | 50 | 0.92 | **1.00** | 0.74 | 0.80 | 0.00 | 0.00 |
+| free | 50 | 0.64 | **0.90** | 0.52 | 0.58 | 0.52 | 0.30 |
+| overall | 300 | 0.87 | **0.94** | 0.74 | 0.79 | 0.38 | 0.36 |
+
+(The rule without a VLM scores 0.84 overall, with free at 0.30.)
+
+**Gate: PASS.** Free reached 0.90 against a bar of 0.80. No kind dropped: colour
+and hidden stayed the same, and marked, habit and hidden-pair rose. Latency was
+measured on the same 449 held-out requests, each adapter on its own fresh
+server: p50 110 ms for both, p95 127 ms for both, so +0%. In the e2e grounding
+run the p50 was 115 ms for both adapters.
+
+One regression, not gated: **deictic ("hand me that one") got worse.** On the
+302 target-2 held-out examples the served new adapter scores deictic 0.45
+against 0.55 for the old one. Relation improved from 0.90 to 0.94, colour stayed
+at 1.00, and the overall score went from 0.82 to 0.80. Deictic was a third of
+the old training data and is 15% here.
+
+End to end, using the same 200 trials and the same SmolVLA run-1 checkpoint as the
+previous section:
+
+| setup | ring on the right block | picked target | picked partner | nothing |
+|---|---|---|---|---|
+| words only (no ring) | - | 0.00 | 0.01 | 0.98 |
+| base grounder | 0.67 | 0.09 | 0.07 | 0.85 |
+| tuned grounder (LoRA) | 0.85 | 0.12 | 0.04 | 0.84 |
+| **retrained grounder (LoRA v2)** | **0.95** | **0.14** | **0.01** | 0.85 |
+| oracle ring | 1.00 | 0.14 | 0.00 | 0.86 |
+
+Ring accuracy by request for v2: my 1.00, your 1.00, habit 0.78, colour 1.00,
+free 0.95 (the old adapter scored 0.57 on free).
+
+What it shows:
+- **Free wording is fixed on the benchmark's templates.** The score went from
+  0.64 to 0.90 on bench5b and from 0.57 to 0.95 end to end. The training data
+  uses the same 22 templates as the benchmark, so this is generalization to new
+  scenes and combinations, not to new phrasings. Wording no template covers is
+  still untested.
+- **With v2 the ring is as good as the oracle's for picking.** Target picks match
+  the oracle (0.14 each) and partner picks fall to 0.01. What remains is the
+  grasp, as in the previous section.
+- Habit stays near its ceiling. Its answer follows a frame the simulated person
+  draws at random, so the best possible is about 0.85.
+- Paired and robot-only also moved (robot-only marked 0.38 -> 0.62, free 0.52
+  -> 0.30). The adapter now leans more on words, but those conditions remain
+  far below geometry.
+- Deictic should be won back before v2 replaces the old adapter in the live
+  pipeline (more deictic rows in the mix, then a fresh check).

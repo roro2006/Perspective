@@ -4,7 +4,7 @@ title: Retrain the grounding LoRA on benchmark-style data and score phase 2
 status: todo
 agent: claude
 depends: [T5-03]
-owns: [scripts/train_lora.py, product/results.md]
+owns: [scripts/train_lora.py, scripts/bench_lora_data.py, tests/test_t5_lora_data.py, product/results.md]
 reads: [docs/target5-perspective-policy.md, curio_robot/bench/score.py, docs/bringup-7900xt.md]
 accept: uv run pytest -q
 ---
