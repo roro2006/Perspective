@@ -1,8 +1,10 @@
-"""T5-01..03 and T5-10: the perspective benchmark, grounding conditions and scoring.
+"""T5-01..03, T5-10 and T5-13: the perspective benchmark, grounding conditions and scoring.
 Test names start with items_, conditions_ or score_ so each card can run its own
 (-k items, -k conditions, -k score)."""
 
 from __future__ import annotations
+
+import re
 
 import pytest
 
@@ -139,6 +141,102 @@ def test_items_free_targets_follow_the_words_and_frame(free_items):
         assert perspective.pick(cands, relation, _viewer(b, other)).object_id != b.target_id
     relations = {_free_relation(b.text) for b in free_items}
     assert {"nearest", "farthest"} <= relations and relations & {"left", "right"}
+
+
+def test_items_heldout_kind_leaves_the_earlier_items_unchanged(world, bench):
+    assert items.KINDS[-1] == "free-heldout" and items.HELDOUT_KINDS == ("free-heldout",)
+    old = items.generate(world, 3, seed=0, kinds=items.KINDS[:-1])
+    assert len(old) == 18
+
+    def key(b):
+        return (b.id, b.text, b.target_id, b.frame, b.p_own_frame, b.robot_visible)
+
+    assert [key(b) for b in old] == [key(b) for b in bench[:18]]
+    for a, b in zip(old, bench[:18], strict=True):
+        assert (a.human.rgb == b.human.rgb).all() and (a.robot.rgb == b.robot.rgb).all()
+
+
+def _tail(template: str) -> str:
+    """The relation part of a FREE template: everything after "{noun}"."""
+    return template.split("{noun}", 1)[1].strip()
+
+
+def _words(phrases) -> set[str]:
+    return {w.lower() for p in phrases for w in p.split()}
+
+
+PRONOUNS = {"me", "you", "i"}
+
+
+def test_items_heldout_wording_shares_nothing_with_free():
+    free = [t for _, _, t in items.FREE_TEMPLATES]
+    heldout = [t for _, _, t in items.HELDOUT_TEMPLATES]
+    assert len(heldout) >= 15 and len(set(heldout)) == len(heldout)
+    assert not set(free) & set(heldout)
+    # No free relation phrase reappears inside a held-out template.
+    assert not [(f, h) for f in free for h in heldout if _tail(f) in h]
+    assert not set(items.FREE_LEADS) & set(items.HELDOUT_LEADS)
+    assert not (_words(items.FREE_LEADS) & _words(items.HELDOUT_LEADS)) - PRONOUNS
+    assert not set(items.FREE_NOUNS) & set(items.HELDOUT_NOUNS)
+    # Nor does a free noun hide in the held-out templates' fixed words.
+    assert not set(items.FREE_NOUNS) & _words(heldout)
+    for _, _, h in items.HELDOUT_TEMPLATES:
+        assert "that one" not in h and "look" not in h and "point" not in h.replace(
+            "point of view", ""
+        )
+
+
+def _template_regex(template: str) -> re.Pattern[str]:
+    pattern = re.escape(template)
+    for name in ("lead", "color", "noun", "side"):
+        pattern = pattern.replace(re.escape("{" + name + "}"), f"(?P<{name}>.+?)")
+    return re.compile(f"^{pattern}$")
+
+
+def _heldout_reading(text: str) -> tuple[str, str]:
+    """(relation, frame) of the one held-out template that produces `text`."""
+    found = []
+    for relation, frame, template in items.HELDOUT_TEMPLATES:
+        m = _template_regex(template).match(text)
+        if m is None:
+            continue
+        g = m.groupdict()
+        if g.get("lead", items.HELDOUT_LEADS[0]) not in items.HELDOUT_LEADS:
+            continue
+        if g["noun"] not in items.HELDOUT_NOUNS:
+            continue
+        found.append((g.get("side", relation), frame))
+    assert len(found) == 1, (text, found)
+    return found[0]
+
+
+@pytest.fixture(scope="module")
+def heldout_items(world):
+    return items.generate(world, 20, seed=1, kinds=("free-heldout",))
+
+
+def test_items_heldout_targets_follow_the_words_and_frame(heldout_items):
+    assert len({b.text for b in heldout_items}) >= len(heldout_items) // 2
+    relations = set()
+    for b in heldout_items:
+        assert b.kind == "free-heldout" and b.p_own_frame is None
+        relation, frame = _heldout_reading(b.text)
+        assert frame == b.frame
+        relations.add(relation)
+        cands = b.object_map.by_color(_partner(b).color)
+        assert len(cands) == 2
+        assert perspective.pick(cands, relation, _viewer(b, b.frame)).object_id == b.target_id
+        other = "robot" if b.frame == "speaker" else "speaker"
+        assert perspective.pick(cands, relation, _viewer(b, other)).object_id != b.target_id
+        if relation in ("nearest", "farthest"):
+            a, c = (perspective.horizontal_distance(o, _viewer(b, b.frame)) for o in cands)
+            assert abs(a - c) >= items.MIN_DISTANCE_GAP
+    assert {"nearest", "farthest"} <= relations and relations & {"left", "right"}
+
+
+def test_score_rule_does_not_crash_on_heldout_wording(heldout_items):
+    answers = [score.rule_predict(b) for b in heldout_items]
+    assert None in answers  # distance wording has no side word for the rule
 
 
 def test_items_save_and_load(tmp_path, bench):

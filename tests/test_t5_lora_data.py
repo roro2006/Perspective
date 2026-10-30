@@ -1,5 +1,6 @@
 """T5-06: benchmark-style LoRA data is the geometry request, in the format
-train_lora.py reads, and never comes from the benchmark or e2e seeds."""
+train_lora.py reads, and never comes from the benchmark or e2e seeds (nor, T5-13,
+from the held-out kinds)."""
 
 from __future__ import annotations
 
@@ -71,3 +72,10 @@ def test_main_writes_a_loadable_dataset(tmp_path):
     rows = load_dataset(tmp_path / "data.jsonl")
     assert len(rows) == len(data.MIX)  # one per kind at this scale
     assert len({r["id"] for r in rows}) == len(rows)
+
+
+def test_heldout_kinds_never_reach_training(tmp_path):
+    data = _load("bench_lora_data")
+    assert not set(data.MIX) & set(bench_items.HELDOUT_KINDS)
+    with pytest.raises(ValueError):
+        data.bench_rows([11], {"free-heldout": 1}, tmp_path)

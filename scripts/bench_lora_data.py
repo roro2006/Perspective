@@ -15,7 +15,9 @@ draws kind-major from one rng, like bench.items.generate, but with per-kind
 counts (MIX) weighted towards free wording and hidden pairs. With
 --deictic-from, deictic rows ("hand me that one") from the target-2 dataset are
 copied in, so the new adapter keeps the gaze skill the benchmark does not test.
-train_lora.py holds out 10% of rows by id hash as the validation slice."""
+train_lora.py holds out 10% of rows by id hash as the validation slice.
+Kinds in bench.items.HELDOUT_KINDS (free-heldout, T5-13) are refused, so their
+wording never reaches training."""
 
 from __future__ import annotations
 
@@ -29,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from curio_robot.bench.conditions import build
-from curio_robot.bench.items import BenchItem, make_item
+from curio_robot.bench.items import HELDOUT_KINDS, BenchItem, make_item
 from curio_robot.sim.grounding_data import load_dataset
 from curio_robot.sim.world import SimWorld
 
@@ -90,7 +92,11 @@ def item_row(item: BenchItem, row_id: str, images: Path) -> dict | None:
 
 
 def bench_rows(seeds: list[int], mix: dict[str, int], images: Path) -> tuple[list[dict], int]:
-    """(rows, skipped) for every seed, kind-major per seed from one rng."""
+    """(rows, skipped) for every seed, kind-major per seed from one rng.
+    ValueError if mix names a held-out kind."""
+    leaked = sorted(set(mix) & set(HELDOUT_KINDS))
+    if leaked:
+        raise ValueError(f"kinds {leaked} are held out of training (bench.items.HELDOUT_KINDS)")
     rows: list[dict] = []
     skipped = 0
     with SimWorld(320, 240) as world:

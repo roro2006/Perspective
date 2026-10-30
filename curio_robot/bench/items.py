@@ -28,7 +28,10 @@ from curio_robot.types import (
 
 # New kinds go at the end: generate() draws kind-major from one rng, so the
 # items of earlier kinds stay identical for the same seed.
-KINDS = ("color", "marked", "habit", "hidden", "hidden-pair", "free")
+KINDS = ("color", "marked", "habit", "hidden", "hidden-pair", "free", "free-heldout")
+# Kinds kept out of every training set (scripts/bench_lora_data.py refuses them),
+# so their scores measure wording the grounder has never seen.
+HELDOUT_KINDS = ("free-heldout",)
 HABITS = (0.15, 0.85)  # p_own_frame shown for "habit" items, as in sim/grounding_data.py
 MIN_VISIBLE_PX = 20  # a block with fewer robot-camera pixels counts as hidden from the robot
 MAX_ATTEMPTS = 200  # redraws allowed while looking for an ambiguous pair
@@ -71,6 +74,32 @@ FREE_TEMPLATES: tuple[tuple[str, Frame, str], ...] = (
     ("nearest", "robot", "{lead} the {color} {noun} nearer to you"),
     ("nearest", "robot", "{lead} the {color} {noun} at your end of the table"),
     ("farthest", "robot", "{lead} the {color} {noun} on the far side from you"),
+)
+
+
+# free-heldout (T5-13): the grounder LoRA trained on FREE_* wording, so this kind
+# shares no template, lead or noun with it (tests check), only the relations.
+HELDOUT_LEADS = ("Give me", "Please bring me", "I'd like", "Fetch me", "Would you pick up")
+HELDOUT_NOUNS = ("piece", "brick", "square", "toy")
+HELDOUT_TEMPLATES: tuple[tuple[str, Frame, str], ...] = (
+    ("side", "speaker", "{lead} the {color} {noun} over on my {side}"),
+    ("side", "speaker", "The {color} {noun} on the {side}, from my point of view, please"),
+    ("side", "speaker", "{lead} the {color} {noun} that is more to the {side} for me"),
+    ("side", "speaker", "{lead} the {color} {noun} on my {side} as I face you"),
+    ("side", "robot", "{lead} the {color} {noun} on the {side} from your side"),
+    ("side", "robot", "{lead} the {color} {noun} that sits to the {side} for you"),
+    ("side", "robot", "{lead} the {color} {noun} on the robot's {side}"),
+    ("side", "robot", "{lead} the {color} {noun} on your {side} as you face me"),
+    ("nearest", "speaker", "{lead} the {color} {noun} nearest to where I am sitting"),
+    ("nearest", "speaker", "{lead} the {color} {noun} that is closer to my seat"),
+    ("farthest", "speaker", "{lead} the {color} {noun} more distant from me"),
+    ("farthest", "speaker", "{lead} the {color} {noun} that is harder for me to reach"),
+    ("nearest", "robot", "{lead} whichever {color} {noun} is closer to the robot"),
+    ("nearest", "robot", "{lead} the {color} {noun} that is easiest for you to reach"),
+    ("nearest", "robot", "{lead} the {color} {noun} right next to you"),
+    ("farthest", "robot", "I want the {color} {noun} that is further from you"),
+    ("farthest", "robot", "{lead} the {color} {noun} that is more distant from the robot"),
+    ("farthest", "robot", "{lead} the {color} {noun} that you would have to stretch for"),
 )
 
 
@@ -126,10 +155,16 @@ def make_item(world: SimWorld, rng: np.random.Generator, kind: str, item_id: str
       hides from the robot, while its partner stays visible: robot-only
       cannot answer and the frame still matters (_try_hidden_pair).
     - free: varied wording a keyword rule cannot parse, with an exact answer
-      from perspective.pick (_try_free, FREE_TEMPLATES)."""
+      from perspective.pick (_try_free, FREE_TEMPLATES).
+    - free-heldout: as free, drawn from HELDOUT_TEMPLATES, HELDOUT_LEADS and
+      HELDOUT_NOUNS, which no training set uses (HELDOUT_KINDS)."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind: {kind}")
-    attempt = {"hidden-pair": _try_hidden_pair, "free": _try_free}.get(kind, _try_item)
+    attempt = {
+        "hidden-pair": _try_hidden_pair,
+        "free": _try_free,
+        "free-heldout": _try_free_heldout,
+    }.get(kind, _try_item)
     for _ in range(MAX_ATTEMPTS):
         item = attempt(world, rng, kind, item_id)
         if item is not None:
@@ -271,6 +306,28 @@ def _try_hidden_pair(
 def _try_free(
     world: SimWorld, rng: np.random.Generator, kind: str, item_id: str
 ) -> BenchItem | None:
+    """One free draw from FREE_TEMPLATES, FREE_LEADS and FREE_NOUNS (_try_worded)."""
+    return _try_worded(world, rng, kind, item_id, FREE_TEMPLATES, FREE_LEADS, FREE_NOUNS)
+
+
+def _try_free_heldout(
+    world: SimWorld, rng: np.random.Generator, kind: str, item_id: str
+) -> BenchItem | None:
+    """One free draw from the wording no training set uses (_try_worded)."""
+    return _try_worded(
+        world, rng, kind, item_id, HELDOUT_TEMPLATES, HELDOUT_LEADS, HELDOUT_NOUNS
+    )
+
+
+def _try_worded(
+    world: SimWorld,
+    rng: np.random.Generator,
+    kind: str,
+    item_id: str,
+    templates: tuple[tuple[str, Frame, str], ...],
+    leads: tuple[str, ...],
+    nouns: tuple[str, ...],
+) -> BenchItem | None:
     """scene = fetch_scene(rng) (no box); idx = int(rng.integers(0, 4)) picks
     a pair block; then a template, lead and noun, each by rng.integers over its
     tuple. Side relations: target = block idx, side = the one perspective.pick
@@ -280,9 +337,9 @@ def _try_free(
     block (the frame must matter)."""
     scene = fetch_scene(rng)
     idx = int(rng.integers(0, PAIR_BLOCKS))
-    relation, frame, template = FREE_TEMPLATES[int(rng.integers(0, len(FREE_TEMPLATES)))]
-    lead = FREE_LEADS[int(rng.integers(0, len(FREE_LEADS)))]
-    noun = FREE_NOUNS[int(rng.integers(0, len(FREE_NOUNS)))]
+    relation, frame, template = templates[int(rng.integers(0, len(templates)))]
+    lead = leads[int(rng.integers(0, len(leads)))]
+    noun = nouns[int(rng.integers(0, len(nouns)))]
     exact = true_map(scene)
     target = exact.objects[idx]
     cands = exact.by_color(target.color)
