@@ -1,7 +1,7 @@
 ---
 id: T5-14
 title: Scripted pick expert that also picks the block hidden behind the box
-status: todo
+status: done
 agent: claude
 depends: [T5-04]
 owns: [curio_robot/sim/expert.py, tests/test_t5_physics.py, pyproject.toml]
