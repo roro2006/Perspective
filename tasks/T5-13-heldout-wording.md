@@ -1,7 +1,7 @@
 ---
 id: T5-13
 title: Benchmark kind free-heldout with wording no training set uses
-status: todo
+status: done
 agent: claude
 depends: [T5-06, T5-10]
 owns: [curio_robot/bench/items.py, tests/test_t5_bench.py, scripts/bench_lora_data.py, tests/test_t5_lora_data.py, docs/target5-perspective-policy.md]
