@@ -11,10 +11,18 @@ grad clip, cosine schedule with warmup) written out here because lerobot-train n
 lerobot[dataset], which the venv lacks (see smolvla_dataset.py). The model is the base
 checkpoint loaded from the local snapshot with load_vlm_weights=False, so nothing is fetched.
 
-Cameras: the base was trained on camera1..3; ours are camera1 (robot view with the target ring)
-and camera2 (person's view). input_features lists only those two, so prepare_images feeds two
-images; with empty_cameras=0 no padded third image is added (a masked one would not be
-attended to anyway). The VLM stays frozen (train_expert_only, the base config).
+Cameras: the base was trained on camera1..3; ours are camera1 (robot view with the target ring),
+camera2 (person's view) and, when the demos have it, camera3 (wrist view, T5-12). input_features
+lists only the cameras the demos have; with empty_cameras=0 no padded image is added (a masked
+one would not be attended to anyway). The VLM stays frozen (train_expert_only, the base config).
+
+Run 2 (T5-12) options: --chunk-size / --n-action-steps shorten the action chunk (the base's 50
+is longer than a 42-frame demo; the expert has no per-position weights, its action tokens are
+placed by RoPE positions, so any length works with the pretrained expert), and --amp bf16 runs
+forward and backward under bf16 autocast (weights and optimizer stay fp32).
+
+The process ends with os._exit after the final checkpoint and log line: run 1 hung at exit
+(DataLoader worker teardown on Windows/ROCm), and nothing is left to do by then.
 
 Outputs under --out: config.json (arguments, split, marker), train_log.jsonl (one line per
 log step: loss, lr, step time, GPU memory; eval lines with the held-out loss), and
@@ -23,16 +31,26 @@ checkpoints/<step>/ with pretrained_model/ (policy + processors) and training_st
 from __future__ import annotations
 
 import argparse
+import contextlib
 import glob
 import json
 import os
+import sys
+import threading
 import time
 from pathlib import Path
 
 import torch
 
 # smolvla_dataset puts the repo root on sys.path, so it comes before curio_robot.
-from smolvla_dataset import CAMERA_KEYS, STATE, CurioPickFrames, marker_settings, split
+from smolvla_dataset import (
+    CAMERA_KEYS,
+    STATE,
+    CurioPickFrames,
+    cameras_of,
+    marker_settings,
+    split,
+)
 
 from curio_robot.sim import demos
 
@@ -47,8 +65,18 @@ def _require_offline() -> None:
             raise SystemExit(f"set {key}={value} (no downloads, no wandb)")
 
 
-def build_policy(snapshot: str, image_hw: tuple[int, int], device: str, ckpt: Path | None):
-    """SmolVLA from the base snapshot (or a checkpoint of this run) with our two cameras."""
+def checkpoint_cameras(ckpt: Path) -> list[str]:
+    """The demos cameras a checkpoint was trained on (run 1: robot, human; run 2: + wrist)."""
+    cfg = json.loads((Path(ckpt) / "config.json").read_text(encoding="utf-8"))
+    return [c for c, key in CAMERA_KEYS.items() if key in cfg["input_features"]]
+
+
+def build_policy(snapshot: str, image_hw: tuple[int, int], device: str, ckpt: Path | None,
+                 cameras: list[str] | None = None, chunk_size: int | None = None,
+                 n_action_steps: int | None = None):
+    """SmolVLA from the base snapshot (or a checkpoint of this run) with our cameras: the
+    ones given, else the checkpoint's, else robot and person. chunk_size and n_action_steps
+    override the source's (a checkpoint keeps its own when they are None)."""
     from lerobot.configs.policies import PreTrainedConfig
     from lerobot.configs.types import FeatureType, PolicyFeature
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
@@ -59,13 +87,27 @@ def build_policy(snapshot: str, image_hw: tuple[int, int], device: str, ckpt: Pa
     cfg.device = device
     cfg.push_to_hub = False
     cfg.empty_cameras = 0
+    if cameras is None:
+        cameras = checkpoint_cameras(ckpt) if ckpt else ["robot", "human"]
     image = PolicyFeature(type=FeatureType.VISUAL, shape=(3, *image_hw))
     cfg.input_features = {
         STATE: PolicyFeature(type=FeatureType.STATE, shape=(6,)),
-        CAMERA_KEYS["robot"]: image,
-        CAMERA_KEYS["human"]: image,
+        **{CAMERA_KEYS[c]: image for c in cameras},
     }
+    if chunk_size:
+        cfg.chunk_size = chunk_size
+    if n_action_steps:
+        cfg.n_action_steps = n_action_steps
+    if cfg.n_action_steps > cfg.chunk_size:
+        raise ValueError(f"n_action_steps {cfg.n_action_steps} > chunk_size {cfg.chunk_size}")
     return SmolVLAPolicy.from_pretrained(source, config=cfg)
+
+
+def autocast(amp: str):
+    """bf16 autocast on the GPU for --amp bf16; a no-op context otherwise."""
+    if amp == "bf16":
+        return torch.autocast("cuda", dtype=torch.bfloat16)
+    return contextlib.nullcontext()
 
 
 def _loader(dataset, batch_size: int, workers: int, shuffle: bool, seed: int):
@@ -76,19 +118,35 @@ def _loader(dataset, batch_size: int, workers: int, shuffle: bool, seed: int):
     )
 
 
-def _cycle(loader):
-    while True:
-        yield from loader
+class _Cycle:
+    """Endless batches from a loader, holding its iterator so the workers can be shut down."""
+
+    def __init__(self, loader) -> None:
+        self.loader = loader
+        self.it = iter(loader)
+
+    def __next__(self):
+        try:
+            return next(self.it)
+        except StopIteration:
+            self.it = iter(self.loader)
+            return next(self.it)
+
+    def close(self) -> None:
+        shutdown = getattr(self.it, "_shutdown_workers", None)
+        if shutdown is not None:
+            shutdown()
 
 
 @torch.no_grad()
-def evaluate(policy, preprocessor, loader) -> float:
+def evaluate(policy, preprocessor, loader, amp: str = "none") -> float:
     policy.eval()
     rng = torch.get_rng_state(), torch.cuda.get_rng_state()
     torch.manual_seed(EVAL_SEED)
     total = n = 0
     for batch in loader:
-        loss, _ = policy.forward(preprocessor(batch))
+        with autocast(amp):
+            loss, _ = policy.forward(preprocessor(batch))
         total += loss.item() * len(batch["task"])
         n += len(batch["task"])
     torch.set_rng_state(rng[0])
@@ -125,6 +183,7 @@ def train(args: argparse.Namespace) -> None:
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
     info = demos.load_info(args.demos)
+    cameras = cameras_of(info)
     train_eps, eval_eps = split(info["total_episodes"])
     image_hw = (info["image_size"]["height"], info["image_size"]["width"])
 
@@ -133,12 +192,13 @@ def train(args: argparse.Namespace) -> None:
         last = (out / "checkpoints" / "last.txt").read_text(encoding="utf-8").strip()
         ckpt = out / "checkpoints" / last
     snapshot = max(glob.glob(SNAPSHOT_GLOB))
-    policy = build_policy(snapshot, image_hw, "cuda", ckpt and ckpt / "pretrained_model")
+    policy = build_policy(snapshot, image_hw, "cuda", ckpt and ckpt / "pretrained_model",
+                          cameras, args.chunk_size, args.n_action_steps)
     policy.train()
     cfg = policy.config
 
-    train_set = CurioPickFrames(args.demos, train_eps, cfg.chunk_size, args.marker)
-    eval_set = CurioPickFrames(args.demos, eval_eps, cfg.chunk_size, args.marker)
+    train_set = CurioPickFrames(args.demos, train_eps, cfg.chunk_size, args.marker, cameras)
+    eval_set = CurioPickFrames(args.demos, eval_eps, cfg.chunk_size, args.marker, cameras)
     eval_subset = torch.utils.data.Subset(
         eval_set, list(range(0, len(eval_set), max(1, len(eval_set) // EVAL_SAMPLES))))
     preprocessor, postprocessor = make_smolvla_pre_post_processors(cfg, train_set.stats())
@@ -167,9 +227,12 @@ def train(args: argparse.Namespace) -> None:
         "trainable_params": trainable,
         "lr": cfg.optimizer_lr,
         "chunk_size": cfg.chunk_size,
+        "n_action_steps": cfg.n_action_steps,
+        "cameras": {c: CAMERA_KEYS[c] for c in cameras},
+        "amp": args.amp,
     }, indent=1), encoding="utf-8")
 
-    batches = _cycle(_loader(train_set, args.batch_size, args.workers, True, args.seed))
+    batches = _Cycle(_loader(train_set, args.batch_size, args.workers, True, args.seed))
     eval_loader = _loader(eval_subset, args.batch_size, 0, False, args.seed)
     torch.cuda.reset_peak_memory_stats()
     t_start = time.perf_counter()
@@ -181,7 +244,8 @@ def train(args: argparse.Namespace) -> None:
             t0 = time.perf_counter()
             batch = next(batches)
             data_time += time.perf_counter() - t0
-            loss, _ = policy.forward(preprocessor(batch))
+            with autocast(args.amp):
+                loss, _ = policy.forward(preprocessor(batch))
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(policy.parameters(), optim_cfg.grad_clip_norm)
             optimizer.step()
@@ -204,7 +268,7 @@ def train(args: argparse.Namespace) -> None:
                 t_last, data_time = time.perf_counter(), 0.0
             if args.eval_freq and step % args.eval_freq == 0:
                 _log(log, {"step": step, "eval_loss": round(
-                    evaluate(policy, preprocessor, eval_loader), 5)})
+                    evaluate(policy, preprocessor, eval_loader, args.amp), 5)})
                 t_last = time.perf_counter()
             if step % args.save_freq == 0 or step == args.steps:
                 path = save_checkpoint(out, step, policy, preprocessor, postprocessor,
@@ -213,6 +277,13 @@ def train(args: argparse.Namespace) -> None:
                 t_last = time.perf_counter()
         _log(log, {"event": "done", "step": args.steps,
                    "elapsed_min": round((time.perf_counter() - t_start) / 60, 2)})
+    if os.environ.get("CURIO_EXIT_TRACE"):  # diagnose a hang at exit: dump stacks after 60 s
+        import faulthandler
+
+        faulthandler.dump_traceback_later(60, exit=False)
+    closer = threading.Thread(target=batches.close, daemon=True)
+    closer.start()
+    closer.join(timeout=60)  # worker shutdown must not block the exit
 
 
 def main() -> None:
@@ -229,7 +300,37 @@ def main() -> None:
     parser.add_argument("--save-freq", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--resume", action="store_true", help="from checkpoints/last.txt")
+    parser.add_argument("--chunk-size", type=int, default=None, help="default: the base's 50")
+    parser.add_argument("--n-action-steps", type=int, default=None,
+                        help="actions run per model call at eval (saved in the checkpoint)")
+    parser.add_argument("--amp", choices=("none", "bf16"), default="none")
     train(parser.parse_args())
+    release_gpu()
+    hard_exit(0)
+
+
+def release_gpu() -> None:
+    """Hand the GPU memory back before exiting (train's locals are gone by now): a process
+    that hangs in driver teardown keeps its VRAM until the machine restarts."""
+    import gc
+
+    gc.collect()
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+
+
+def hard_exit(code: int) -> None:
+    """End the process now: run 1 (and a T5-12 smoke run, even with os._exit) hung after its
+    last checkpoint, with everything already saved. On Windows TerminateProcess skips the DLL
+    detach handlers that os._exit still runs."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.TerminateProcess(kernel32.GetCurrentProcess(), code)
+    os._exit(code)
 
 
 if __name__ == "__main__":

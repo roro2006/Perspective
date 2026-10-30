@@ -32,7 +32,8 @@ Scenes are fetch_scene without the box from seeds 70000+ (demos 1000-1300, smolv
 benchmark does), so a frame-blind grounder is wrong half the time; scenes whose target or
 partner would fall outside the policy's robot image are skipped. The grounder sees the
 benchmark's 320x240 renders; the ring is drawn at the chosen block's start pixel in the
-policy's own image size."""
+policy's own image size. The policy's cameras follow the checkpoint: a run-2 checkpoint
+(T5-12) also gets the wrist view as camera3, which smolvla_eval.rollout renders."""
 
 from __future__ import annotations
 
@@ -400,6 +401,7 @@ def run_rollouts(args: argparse.Namespace) -> dict:
     report = {"checkpoint": str(args.checkpoint), "device": args.device, "n": len(records),
               "horizon_s": args.horizon, "ctrl": args.ctrl,
               "n_action_steps": policy.config.n_action_steps,
+              "cameras": sve.policy_cameras(policy),
               "summary": summarize(rows, list(choices))}
     (out / "summary.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
     return report

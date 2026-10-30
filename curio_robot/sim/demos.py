@@ -22,7 +22,15 @@ give it. Recordings stay raw; the ring is drawn at conversion time
 (draw_marker, marker_uv), so its look and mode can change without
 re-recording. Mode "start" keeps the ring at the target's start pixel for the
 whole episode, as at run time, where grounding points once before the pick;
-"track" follows the block."""
+"track" follows the block.
+
+Wrist camera (T5-12): the SO-101's wrist_cam (so101.xml, on the camera mount)
+sees the jaws and the block close up for the last centimetres, which the robot
+camera resolves at about 8 px per block. Recordings store it as a third image
+per frame unless wrist=False; folders recorded before it have two cameras and
+still load. Its near clip plane is lowered for that render only (render_wrist):
+the scene's default (1% of an 8 m extent, 8 cm) cuts away the jaws and a
+grasped block."""
 
 from __future__ import annotations
 
@@ -52,6 +60,10 @@ MARKER_WIDTH = 2  # px, ring thickness
 MARKER_COLOUR = (255, 0, 255)  # magenta: no block, table or arm has it
 MARKER_MODES = ("start", "track")
 
+WRIST_CAM = "wrist_cam"  # camera name in so101.xml; images are stored under "wrist"
+WRIST = "wrist"
+WRIST_ZNEAR_M = 0.005  # near clip for the wrist view: the fixed jaw is about 3 cm away
+
 
 @dataclass(frozen=True, slots=True)
 class _Frame:
@@ -59,6 +71,7 @@ class _Frame:
     target_pixel: tuple[float, float] | None
     robot_rgb: np.ndarray
     human_rgb: np.ndarray
+    wrist_rgb: np.ndarray | None = None
 
 
 def words_for(scene: TaskScene, i: int) -> tuple[str, str | None]:
@@ -175,18 +188,32 @@ def marker_uv(episode: dict, frame: dict, mode: str = "start") -> list[float] | 
     raise ValueError(f"marker mode {mode!r} not in {MARKER_MODES}")
 
 
-def _observe(world: PhysWorld, i: int) -> _Frame:
+def render_wrist(world: PhysWorld) -> np.ndarray:
+    """The wrist camera image (RGB uint8), rendered with a near plane of WRIST_ZNEAR_M.
+    The scene's own near plane is restored afterwards, so the other cameras render
+    exactly as before."""
+    vis_map = world.model.vis.map
+    znear = float(vis_map.znear)
+    vis_map.znear = WRIST_ZNEAR_M / float(world.model.stat.extent)
+    try:
+        return world.render_camera(WRIST_CAM).rgb
+    finally:
+        vis_map.znear = znear
+
+
+def _observe(world: PhysWorld, i: int, wrist: bool) -> _Frame:
     robot = world.render_camera(ROBOT_CAM)
     human = world.render_camera(HUMAN_CAM)
-    return _Frame(world.arm_qpos(), target_pixel(world, i, robot), robot.rgb, human.rgb)
+    return _Frame(world.arm_qpos(), target_pixel(world, i, robot), robot.rgb, human.rgb,
+                  render_wrist(world) if wrist else None)
 
 
 def _run_episode(
-    world: PhysWorld, scene: TaskScene, i: int
+    world: PhysWorld, scene: TaskScene, i: int, wrist: bool = True
 ) -> tuple[bool, str, list[_Frame], list[np.ndarray]]:
     """Reset to scene, pick block i, return (success, reason, frames, actions)."""
     world.reset(scene)
-    frames = [_observe(world, i)]
+    frames = [_observe(world, i, wrist)]
     actions: list[np.ndarray] = []
     ticks = 0
 
@@ -195,7 +222,7 @@ def _run_episode(
         ticks += 1
         if ticks % TICKS_PER_FRAME == 0:
             actions.append(ctrl.copy())
-            frames.append(_observe(w, i))
+            frames.append(_observe(w, i, wrist))
 
     result = pick(world, i, on_tick)
     actions.append(world.ctrl())  # the last frame holds
@@ -227,7 +254,10 @@ def _write_episode(
     with (out_dir / "data" / f"episode_{index:06d}.jsonl").open("w", encoding="utf-8") as f:
         for k, (frame, action) in enumerate(zip(frames, actions, strict=True)):
             paths = {}
-            for cam, rgb in ((ROBOT_CAM, frame.robot_rgb), (HUMAN_CAM, frame.human_rgb)):
+            views = [(ROBOT_CAM, frame.robot_rgb), (HUMAN_CAM, frame.human_rgb)]
+            if frame.wrist_rgb is not None:
+                views.append((WRIST, frame.wrist_rgb))
+            for cam, rgb in views:
                 rel = f"images/episode_{index:06d}/{cam}_{k:04d}.png"
                 Image.fromarray(rgb).save(out_dir / rel)
                 paths[cam] = rel
@@ -253,6 +283,7 @@ def record(
     include_failed: bool = False,
     overwrite: bool = False,
     words: str = "fixed",
+    wrist: bool = True,
 ) -> dict:
     """Record n_episodes expert picks into out_dir.
 
@@ -261,7 +292,8 @@ def record(
     (the next attempt takes their place, up to MAX_ATTEMPTS_PER_EPISODE *
     n_episodes attempts) unless include_failed, when they are kept with
     "success": false. FileExistsError if meta/info.json exists and not
-    overwrite. Returns {"episodes", "frames", "attempts", "successes", "failed"}."""
+    overwrite. With wrist, every frame also stores the wrist camera image ("wrist").
+    Returns {"episodes", "frames", "attempts", "successes", "failed"}."""
     out_dir = Path(out_dir)
     _prepare(out_dir, overwrite)
     world = PhysWorld(width, height)
@@ -271,7 +303,7 @@ def record(
         while len(episodes) < n_episodes and attempts < MAX_ATTEMPTS_PER_EPISODE * n_episodes:
             episode_seed, scene, i = _episode_seed_and_target(seed, attempts)
             attempts += 1
-            success, reason, frames, actions = _run_episode(world, scene, i)
+            success, reason, frames, actions = _run_episode(world, scene, i, wrist)
             successes += success
             if not success and not include_failed:
                 continue
@@ -305,7 +337,7 @@ def record(
         "format": FORMAT,
         "fps": FPS,
         "image_size": {"width": width, "height": height},
-        "cameras": [ROBOT_CAM, HUMAN_CAM],
+        "cameras": [ROBOT_CAM, HUMAN_CAM, *([WRIST] if wrist else [])],
         "state_names": list(ARM_JOINTS),
         "action_names": list(ARM_JOINTS),
         "total_episodes": len(episodes),
@@ -329,7 +361,8 @@ def load_info(out_dir: Path) -> dict:
 
 def load_episode(out_dir: Path, i: int, images: bool = False) -> dict:
     """{"episode": its episodes.jsonl line, "frames": its data lines}; with
-    images, each frame also gets "robot_rgb" and "human_rgb" (uint8 arrays)."""
+    images, each frame also gets "<camera>_rgb" (uint8 arrays) for every camera it
+    stored: "robot" and "human", and "wrist" when recorded with it."""
     out_dir = Path(out_dir)
     with (out_dir / "meta" / "episodes.jsonl").open(encoding="utf-8") as f:
         episode = next(ep for ep in map(json.loads, f) if ep["episode_index"] == i)
