@@ -1,7 +1,7 @@
 ---
 id: T5-12
 title: SmolVLA run 2 with the wrist camera and varied wording
-status: todo
+status: done
 agent: claude
 depends: [T5-07, T5-08, T5-09]
 owns: [curio_robot/sim/demos.py, scripts/smolvla_dataset.py, scripts/smolvla_train.py, scripts/smolvla_eval.py, scripts/e2e_eval.py, tests/test_t5_demos.py, product/results.md]
