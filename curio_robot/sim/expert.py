@@ -6,10 +6,20 @@ block. Blocks at the far edge of the workspace are out of reach with the jaws
 vertical, so the gripper leans outwards there, by the least tilt that reaches.
 IK runs on a copy of the data; the arm is only ever moved through its
 actuators, by ramping ctrl towards the IK joint targets once per control tick.
-Waypoints: above the block, straight down, close the jaw, straight up, hold."""
+Waypoints: above the block, straight down, close the jaw, straight up, hold.
+
+Hidden blocks (task T5-14): an occluded scene puts a 9 cm box 2 cm from the
+block, between it and the robot, and the plain grasp clips it. The planner
+checks every move against the box on a copy of the model (with a clearance
+margin) and, when no plain grasp is clear, tries grasps that suit a box: a
+higher pre-grasp, the gripper's thin side turned towards the box, a narrower
+jaw, a grasp a little higher up the block, and a way round to the pre-grasp
+(also out of the box when fetch_scene puts it against the parked arm)."""
 
 from __future__ import annotations
 
+import copy
+import itertools
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -35,6 +45,25 @@ IK_POS_TOL = 0.003  # m
 MAX_AXIS_ERR = 0.25  # rad between the jaw axis and the block's face normal
 PATH_STEP = 0.01  # m between planned poses on the way down and up
 TILTS = np.radians([0, 6, 12, 18, 24, 30, 36])  # outward lean tried, least first
+# For a block beside something tall (_stages); only tried when no plain grasp is clear.
+HIGH_APPROACH = 0.11  # m: fingertips about 2 cm above the box top
+YAW_STEP = np.radians(6)  # between closing yaws from a block face to along the box
+BOX_NEAR = 0.12  # m from the block centre: the box is in the way
+JAW_NARROW = 0.3  # rad, about 1 cm clearance beside the block
+GRASP_RAISE = 0.005  # m higher up the block
+FINE_TILTS = np.radians(np.arange(0, 39, 3))
+CLEARANCE = 0.003  # m the planned path keeps from the box
+RAMP_SAMPLES = 16  # poses checked on the joint-space move to the pre-grasp
+VIA_FOLDS = (0.5, 0.3, 0.7)  # how far back towards folded the via pose is, tried in turn
+RAISED_ELBOW_WRIST = (0.7, 1.0)  # rad: from the parked pose, lifts the gripper to ~20 cm
+VIA_SECONDS = 0.6  # per leg of a move through via poses
+STUCK_PENALTY = 1000  # contacts charged to a straight move out of a box
+ESCAPE_PAN = 0.4  # rad turned to get the parked arm out of a box placed against it
+ESCAPE_GAIN = 2e-4  # m further from the box each checked step on the way out of it
+DEFLECTED = 0.02  # rad off its ctrl: the parked arm has been pushed by a box
+DESCENT_SPEED = APPROACH / 0.6  # m/s down to the block
+HIGH_DESCENT_SPEED = DESCENT_SPEED / 3  # beside the box: the servos lag less
+LIFT_SPEED = APPROACH / 0.8  # m/s back up
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +86,10 @@ class Pose:
 @dataclass(frozen=True, slots=True)
 class Grasp:
     yaw: float  # jaw closing direction, rad
-    path: tuple[Pose, ...]  # jaws around the block first, then up to APPROACH above it
+    path: tuple[Pose, ...]  # jaws around the block first, then up to the pre-grasp above it
+    jaw: float = JAW_OPEN  # opening on the way down
+    height: float = APPROACH  # pre-grasp height above the grasp, m
+    vias: tuple[np.ndarray, ...] = ()  # (5,) arm poses passed on the way to the pre-grasp
 
     @property
     def at(self) -> Pose:
@@ -69,31 +101,40 @@ class Grasp:
 
 
 class _Ik:
-    """Damped least squares on a private MjData, so the world is untouched."""
+    """Damped least squares on a private MjData, so the world is untouched.
+
+    The model is a copy whose box has a CLEARANCE collision margin, so the
+    collision checks keep the arm that far from it."""
 
     def __init__(self, world: PhysWorld) -> None:
-        self.model = world.model
-        self.data = mujoco.MjData(world.model)
+        self.model = copy.deepcopy(world.model)
+        self.model.geom_margin[self.model.geom("occluder").id] = CLEARANCE
+        self.data = mujoco.MjData(self.model)
         self.data.qpos[:] = world.data.qpos
         self.body = self.model.body("gripper").id
         self.lo, self.hi = self.model.jnt_range[:N_ARM].T
+        self.deepest = np.inf
         self.arm_bodies = set(range(self.model.body("base").id, self.model.nbody)) - {
             self.model.body(n).id for n in world.body_names()
         }
 
     def collisions(self, q: np.ndarray, jaw: float, ignore_geom: int) -> int:
         """How many contacts the arm at q (jaw open to jaw) would make with
-        anything but itself and the geom ignore_geom (the block to grasp)."""
+        anything but itself and the geom ignore_geom (the block to grasp;
+        -1 for none). Within CLEARANCE of the box counts as a contact.
+        Sets self.deepest: the least contact distance (m; inf if none)."""
         m, d = self.model, self.data
         d.qpos[:N_ARM] = q
         d.qpos[N_ARM] = jaw
         mujoco.mj_kinematics(m, d)
         mujoco.mj_collision(m, d)
         hits = 0
+        self.deepest = np.inf
         for c in d.contact[: d.ncon]:
             arm = [m.geom_bodyid[g] in self.arm_bodies for g in (c.geom1, c.geom2)]
             if arm[0] != arm[1] and ignore_geom not in (c.geom1, c.geom2):
                 hits += 1
+                self.deepest = min(self.deepest, float(c.dist))
         return hits
 
     def solve(
@@ -151,55 +192,246 @@ def _seed(xy: np.ndarray) -> np.ndarray:
 
 def _reach(
     ik: _Ik, pos: np.ndarray, yaw: float, outward: np.ndarray, seed: np.ndarray,
-    min_tilt: float = 0.0,
+    min_tilt: float = 0.0, tilts: np.ndarray = TILTS,
 ) -> tuple[Pose, float] | None:
     """The least-tilted pose (from min_tilt) with GRASP_POINT at pos and the
-    jaws along yaw, and its jaw-axis error; None if no tilt in TILTS reaches."""
-    for tilt in TILTS[TILTS >= min_tilt - 1e-9]:
+    jaws along yaw, and its jaw-axis error; None if no tilt in tilts reaches."""
+    for tilt in tilts[tilts >= min_tilt - 1e-9]:
         q, ep, axis = ik.solve(pos, jaw_frame(yaw, tilt, outward), seed)
         if ep <= IK_POS_TOL and axis <= MAX_AXIS_ERR:
             return Pose(float(tilt), q), axis
     return None
 
 
+def _path(
+    ik: _Ik, centre: np.ndarray, yaw: float, outward: np.ndarray, height: float,
+    tilts: np.ndarray = TILTS,
+) -> tuple[list[Pose], float] | None:
+    """A pose every PATH_STEP up the vertical line from centre (the grasp) to
+    height above it, each with the least tilt that reaches (higher up the
+    wrist runs out of bend sooner, so the tilt grows on the way up), and the
+    jaw-axis error at the block. None if some height is out of reach."""
+    at = _reach(ik, centre, yaw, outward, _seed(centre[:2]), tilts=tilts)
+    if at is None:
+        return None
+    path = [at[0]]
+    for h in np.linspace(0.0, height, round(height / PATH_STEP) + 1)[1:]:
+        pose = _reach(ik, centre + [0, 0, h], yaw, outward, path[-1].q, path[-1].tilt, tilts)
+        if pose is None:
+            return None
+        path.append(pose[0])
+    return path, at[1]
+
+
+def _ramp_hits(ik: _Ik, start: np.ndarray, q: np.ndarray, jaw: float) -> int:
+    """Contacts on the joint-space move from ctrl start to pre-grasp q.
+
+    A box can be placed against the parked arm; contacts the move starts in
+    don't count until it has got clear of them, as long as every step moves
+    away from the box by ESCAPE_GAIN (else STUCK_PENALTY: pressed against
+    the box, the arm jams rather than slide along it)."""
+    goal = np.append(q, jaw)
+    hits = 0
+    clear = ik.collisions(start[:N_ARM], float(start[N_ARM]), -1) == 0
+    depth = ik.deepest
+    for s in np.linspace(0.0, 1.0, RAMP_SAMPLES)[1:]:
+        c = start + (goal - start) * s
+        n = ik.collisions(c[:N_ARM], float(c[N_ARM]), -1)
+        if not clear and n and ik.deepest < depth + ESCAPE_GAIN:
+            hits += STUCK_PENALTY
+        depth = ik.deepest
+        clear = clear or n == 0
+        hits += n if clear else 0
+    return hits
+
+
+def _via_chains(
+    start: np.ndarray, above: np.ndarray, stuck: bool
+) -> list[tuple[np.ndarray, ...]]:
+    """Ways round to the pre-grasp above when the straight move hits something.
+
+    Part-folded: turned and rolled as at the pre-grasp, with shoulder, elbow
+    and wrist part-way back to start's, so the arm unfolds onto the
+    pre-grasp. Raised: first the elbow and wrist up at start's turn (the
+    parked gripper is low, beside the table), then (or not) turned, then
+    down. When the arm starts stuck against a box: first a turn either way
+    out of the box and then raised, else the raised way. (Pressed against
+    the box, the arm only comes away along the contact normal, and the
+    collision check can't tell sliding from separating well, so the turn,
+    which separates in most such scenes, goes first.)"""
+    def raise_(q: np.ndarray) -> np.ndarray:
+        up = q.copy()
+        up[2:4] = RAISED_ELBOW_WRIST
+        return up
+
+    turned = raise_(start[:N_ARM])
+    turned[[0, 4]] = above[[0, 4]]
+    chains: list[tuple[np.ndarray, ...]] = [(raise_(start[:N_ARM]), turned)]
+    if stuck:
+        for sign in (-1, 1):
+            out = start[:N_ARM].copy()
+            out[0] += sign * ESCAPE_PAN
+            chains.insert(0, (out, raise_(out), turned))
+        return chains
+    for fold in VIA_FOLDS:
+        q = above.copy()
+        q[1:4] += fold * (start[1:4] - above[1:4])
+        chains.insert(-1, (q,))
+    return chains
+
+
+def _approach(
+    ik: _Ik, start: np.ndarray, above: np.ndarray, jaw: float
+) -> tuple[tuple[np.ndarray, ...], int]:
+    """The move from ctrl start to the pre-grasp above: straight in joint
+    space if that is clear, else the _via_chains way that touches least.
+    A box can be placed against the parked arm (fetch_scene doesn't know
+    where it is); then the arm first has to move straight away from it (see
+    _ramp_hits), so the straight move costs STUCK_PENALTY.
+    Returns (via poses, contacts)."""
+    stuck = ik.collisions(start[:N_ARM], float(start[N_ARM]), -1) > 0
+    direct = _ramp_hits(ik, start, above, jaw)
+    best: tuple[tuple[np.ndarray, ...], int] = ((), direct + STUCK_PENALTY * stuck)
+    for chain in _via_chains(start, above, stuck):
+        if best[1] == 0:
+            break
+        hits, at = 0, start
+        for q in (*chain, above):
+            hits += _ramp_hits(ik, at, q, jaw)
+            at = np.append(q, jaw)
+        if hits < best[1]:
+            best = (chain, hits)
+    return best
+
+
+def _start(world: PhysWorld) -> np.ndarray:
+    """The ctrl the first move starts from: the current ctrl, unless the arm
+    has been pushed more than DEFLECTED off it (a box placed against the
+    parked arm), then where the arm actually is."""
+    ctrl = world.ctrl()
+    q = world.arm_qpos()
+    if np.abs(q[:N_ARM] - ctrl[:N_ARM]).max() <= DEFLECTED:
+        return ctrl
+    return np.append(q[:N_ARM], ctrl[N_ARM])
+
+
+@dataclass(frozen=True, slots=True)
+class _Stage:
+    """One round of grasp candidates (see plan_grasp)."""
+
+    height: float  # pre-grasp height
+    yaws: tuple[tuple[float, float], ...]  # (closing yaw, angle off the block's faces)
+    jaws: tuple[float, ...]
+    lifts: tuple[float, ...]  # grasp heights above the block centre
+    tilts: np.ndarray
+    precheck: bool  # test the jaws at the block before planning a whole path
+
+
+def _wrap(a: float) -> float:
+    return float((a + np.pi) % (2 * np.pi) - np.pi)
+
+
+def _box_along(world: PhysWorld, i: int) -> float | None:
+    """The yaw of the box's long side if the box is on the table beside
+    block i (within BOX_NEAR), else None."""
+    occ = world.model.body("occluder").id
+    pos = world.model.body_pos[occ]
+    if pos[2] < 0 or np.linalg.norm(pos[:2] - world.block_position(i)[:2]) > BOX_NEAR:
+        return None
+    w, _, _, z = world.model.body_quat[occ]
+    return 2 * float(np.arctan2(z, w)) + np.pi / 2  # the box is long along its y axis
+
+
+def _box_yaws(
+    world: PhysWorld, i: int, along: float | None
+) -> tuple[tuple[float, float], ...]:
+    """Closing yaws for a block beside a box whose long side runs along yaw
+    along, least off-face first: from the face nearest each of the two
+    along-side directions, in YAW_STEP steps, to that direction (where the
+    gripper's long side is parallel to the box, and furthest from it). Just
+    the faces if there's no box (along None)."""
+    faces = [world.block_yaw(i) + k * np.pi / 2 for k in range(4)]
+    if along is None:
+        return tuple((f, 0.0) for f in faces)
+    out: list[tuple[float, float]] = []
+    for d in (along, along + np.pi):
+        face = min(faces, key=lambda f, d=d: abs(_wrap(d - f)))
+        delta = _wrap(d - face)
+        n = int(np.ceil(abs(delta) / YAW_STEP))
+        out += [(face + delta * k / max(n, 1), abs(delta) * k / max(n, 1)) for k in range(n + 1)]
+    return tuple(sorted(out, key=lambda c: c[1]))
+
+
+def _stages(world: PhysWorld, i: int) -> tuple[_Stage, ...]:
+    """Plain grasps first; then the grasps for a block beside something tall
+    (the 9 cm box of an occluded scene): a pre-grasp high enough that the
+    fingertips pass over the box, yaws turning the gripper's long side along
+    it, a narrower jaw, finer tilts, and a grasp a little higher up the block
+    (less reach, so less lean towards the box). With no box near, the second
+    stage keeps the plain pre-grasp height (it helps far blocks whose tilted
+    fingertips touch the table)."""
+    faces = tuple((world.block_yaw(i) + k * np.pi / 2, 0.0) for k in range(4))
+    along = _box_along(world, i)
+    return (
+        _Stage(APPROACH, faces, (JAW_OPEN,), (0.0,), TILTS, precheck=False),
+        _Stage(APPROACH if along is None else HIGH_APPROACH, _box_yaws(world, i, along),
+               (JAW_OPEN, JAW_NARROW), (0.0, GRASP_RAISE), FINE_TILTS, precheck=True),
+    )
+
+
 def plan_grasp(world: PhysWorld, i: int) -> Grasp | None:
     """The grasp of block i, or None if it is out of reach.
 
-    A pose every PATH_STEP up the vertical line from the block to APPROACH
-    above it, each with the least tilt that reaches (higher up the wrist runs
-    out of bend sooner, so the tilt grows on the way up). Of the four yaws
-    that close across the block's faces, one whose path (jaws open) touches
-    nothing but the block wins, then the least tilt at the block, then the
-    least jaw-axis error, then (when tilted) the fixed jaw on the outer side,
-    then the smallest wrist roll."""
+    Stage by stage (_stages), until a stage has a clear grasp: the move there
+    and the path down (jaws open) touch nothing but the block and keep
+    CLEARANCE from the box. A clear grasp wins, then the least angle off the
+    block's faces, the lower grasp, the least tilt at the block, the least
+    jaw-axis error, (when tilted) the fixed jaw on the outer side, the
+    smallest wrist roll, and the wider jaw."""
     centre = world.block_position(i)
     outward = np.array([centre[0], centre[1], 0.0])
     outward /= np.linalg.norm(outward)
-    heights = np.linspace(0.0, APPROACH, round(APPROACH / PATH_STEP) + 1)
     ik = _Ik(world)
-    best: tuple[tuple[bool, float, float, bool, float], Grasp] | None = None
-    for k in range(4):
-        yaw = world.block_yaw(i) + k * np.pi / 2
-        at = _reach(ik, centre, yaw, outward, _seed(centre[:2]))
-        if at is None:
-            continue
-        path = [at[0]]
-        for h in heights[1:]:
-            pose = _reach(ik, centre + [0, 0, h], yaw, outward, path[-1].q, path[-1].tilt)
-            if pose is None:
-                break
-            path.append(pose[0])
-        if len(path) < len(heights):
-            continue
-        # Leaning outwards swings the fingertips outwards; with the fixed jaw on
-        # the outer side it swings away from the block instead of onto it.
-        inward = -float(np.cos(yaw) * outward[0] + np.sin(yaw) * outward[1])
-        fixed_inside = at[0].tilt > 0 and inward < 0
-        hits = sum(ik.collisions(pose.q, JAW_OPEN, world.block_ids()[i]) for pose in path)
-        score = (hits > 0, at[0].tilt, round(at[1], 1), fixed_inside, abs(at[0].q[4]))
-        if best is None or score < best[0]:
-            best = (score, Grasp(yaw, tuple(path)))
+    start = _start(world)
+    block = world.block_ids()[i]
+    best: tuple[tuple, Grasp] | None = None
+    for stage in _stages(world, i):
+        for (yaw, off), lift in itertools.product(stage.yaws, stage.lifts):
+            if best is not None and not best[0][0] and off > best[0][1] + 1e-9:
+                break  # a clear grasp closer to the faces is already in hand
+            pos = centre + [0, 0, lift]
+            if _blocked_at(ik, pos, yaw, outward, stage, block):
+                continue
+            planned = _path(ik, pos, yaw, outward, stage.height, stage.tilts)
+            if planned is None:
+                continue
+            path, axis = planned
+            # Leaning outwards swings the fingertips outwards; with the fixed jaw on
+            # the outer side it swings away from the block instead of onto it.
+            inward = -float(np.cos(yaw) * outward[0] + np.sin(yaw) * outward[1])
+            fixed_inside = path[0].tilt > 0 and inward < 0
+            for jaw in stage.jaws:
+                vias, hits = _approach(ik, start, path[-1].q, jaw)
+                hits += sum(ik.collisions(p.q, jaw, block) for p in path)
+                score = (hits > 0, round(off, 3), lift, path[0].tilt, round(axis, 1),
+                         fixed_inside, abs(path[0].q[4]), jaw != JAW_OPEN)
+                if best is None or score < best[0]:
+                    best = (score, Grasp(yaw, tuple(path), jaw, stage.height, vias))
+        if best is not None and not best[0][0]:
+            break
     return None if best is None else best[1]
+
+
+def _blocked_at(
+    ik: _Ik, pos: np.ndarray, yaw: float, outward: np.ndarray, stage: _Stage, block: int
+) -> bool:
+    """True if the stage prechecks and the jaws can't be around the block
+    without a contact at any of the openings: a quick test before planning
+    the whole path (the plain stage's candidates are few, and usually clear)."""
+    if not stage.precheck:
+        return False
+    at = _reach(ik, pos, yaw, outward, _seed(pos[:2]), tilts=stage.tilts)
+    return at is None or all(ik.collisions(at[0].q, j, block) for j in stage.jaws)
 
 
 def pick(world: PhysWorld, i: int, on_tick: Tick | None = None) -> PickResult:
@@ -237,13 +469,18 @@ def pick(world: PhysWorld, i: int, on_tick: Tick | None = None) -> PickResult:
         for _ in range(round(seconds / CONTROL_DT)):
             tick(world.ctrl())
 
-    ramp(grasp.above.q, 1.2, JAW_OPEN)
+    if not np.array_equal(_start(world), world.ctrl()):
+        tick(_start(world))  # pushed off its target: move on from where it is
+    for via in grasp.vias:
+        ramp(via, VIA_SECONDS, grasp.jaw)
+    ramp(grasp.above.q, VIA_SECONDS if grasp.vias else 1.2, grasp.jaw)
     hold(0.2)
-    vertical(True, 0.6, JAW_OPEN)
+    speed = DESCENT_SPEED if grasp.height == APPROACH else HIGH_DESCENT_SPEED
+    vertical(True, grasp.height / speed, grasp.jaw)
     hold(0.2)
     ramp(grasp.at.q, 0.3, JAW_CLOSED)
     hold(0.2)
-    vertical(False, 0.8, JAW_CLOSED)
+    vertical(False, grasp.height / LIFT_SPEED, JAW_CLOSED)
     hold(0.1)
     if not world.lifted(i, LIFT_HEIGHT):
         return PickResult(False, len(log), np.array(log), "not lifted")

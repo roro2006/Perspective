@@ -35,3 +35,6 @@ packages = ["curio_robot"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+markers = ["slow: runs many physics episodes (tens of seconds); deselect with -m 'not slow'"]

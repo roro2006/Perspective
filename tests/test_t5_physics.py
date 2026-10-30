@@ -1,4 +1,7 @@
-"""Physics world and scripted pick (task T5-04)."""
+"""Physics world and scripted pick (tasks T5-04, T5-14).
+
+The two pick-rate gates run 100 physics episodes each (about 35 s and 50 s);
+they are marked slow (deselect with -m "not slow") but stay in the suite."""
 
 from __future__ import annotations
 
@@ -15,6 +18,8 @@ from curio_robot.types import HUMAN_CAM, ROBOT_CAM
 
 N_SCENES = 100
 GATE = 0.90
+OCCLUDED_GATE = 0.85
+HIDDEN = 4  # fetch_scene's single block, the one its box hides (after two pairs)
 
 
 @pytest.fixture(scope="module")
@@ -53,6 +58,7 @@ def test_cameras_render(world):
         assert frame.segmentation is not None
 
 
+@pytest.mark.slow
 def test_expert_picks_in_most_scenes(world):
     """One target per scene, cycling through all five block indices (pairs
     and the single), so each index is the target in 20 of the 100 scenes."""
@@ -67,6 +73,21 @@ def test_expert_picks_in_most_scenes(world):
             assert result.ctrl_log.shape == (result.steps, 6)
             assert world.lifted(i)
     assert wins / N_SCENES >= GATE, f"{wins}/{N_SCENES}"
+
+
+@pytest.mark.slow
+def test_expert_picks_the_hidden_block_in_most_occluded_scenes(world):
+    """T5-14: the box 4.5 cm in front of the single block (between it and the
+    robot camera), and that block as the target. Counts every scene, also the
+    ones where fetch_scene's box overlaps another block (17 of these 100)."""
+    wins = 0
+    for seed in range(N_SCENES):
+        world.reset(fetch_scene(np.random.default_rng(seed), occlude=True))
+        result = pick(world, HIDDEN)
+        wins += result.success
+        if result.success:
+            assert world.lifted(HIDDEN)
+    assert wins / N_SCENES >= OCCLUDED_GATE, f"{wins}/{N_SCENES}"
 
 
 def test_out_of_reach_block_is_not_picked(world):
