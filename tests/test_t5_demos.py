@@ -5,12 +5,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from curio_robot.collab.tasks import TaskScene
+from curio_robot.collab.tasks import TaskScene, fetch_scene
+from curio_robot.sim import expert
 from curio_robot.sim.demos import (
     FORMAT,
     FPS,
     MARKER_COLOUR,
     MARKER_MODES,
+    MAX_FRAMES,
     WRIST,
     draw_marker,
     load_episode,
@@ -20,7 +22,7 @@ from curio_robot.sim.demos import (
     render_wrist,
     words_for,
 )
-from curio_robot.sim.physics import ARM_JOINTS
+from curio_robot.sim.physics import ARM_JOINTS, PhysWorld
 from curio_robot.sim.world import BlockSpec
 
 W, H = 160, 120
@@ -187,3 +189,35 @@ def test_recovery_demos_mark_their_off_target_frames(tmp_path):
             assert flags == [False] * skip + [True] * (len(flags) - skip)
         else:  # a plan the expert can't shift runs as a plain pick
             assert all("train" not in f for f in ep["frames"])
+
+
+def test_noisy_pick_labels_the_clean_command_and_closes_only_straddling():
+    rng = np.random.default_rng(3000)
+    scene = fetch_scene(rng)
+    i = int(rng.integers(0, len(scene.blocks)))
+    world = PhysWorld(W, H)
+    log = []
+    try:
+        world.reset(scene)
+
+        def on_tick(w, executed, label):
+            log.append((executed, label, expert.straddles(w, i)))
+
+        result = expert.noisy_pick(world, i, np.random.default_rng(1), 0.01, on_tick)
+    finally:
+        world.close()
+    assert result.success
+    assert any(np.abs(ex - lab).max() > 1e-3 for ex, lab, _ in log)  # noise was executed
+    first_close = next(k for k, (_, lab, _) in enumerate(log) if lab[5] < expert.JAW_OPEN)
+    assert log[first_close - 1][2]  # the jaws straddled the block on the tick before
+    assert all(np.allclose(ex, lab) for ex, lab, _ in log[first_close:])
+
+
+def test_noisy_demos_stay_within_the_horizon(tmp_path):
+    summary = record(2, seed=5000, out_dir=tmp_path, width=W, height=H, noise=0.012, wrist=False)
+    assert summary["episodes"] == 2
+    assert load_info(tmp_path)["noise"] == 0.012
+    for i in range(2):
+        ep = load_episode(tmp_path, i)
+        assert len(ep["frames"]) <= MAX_FRAMES
+        assert {"noise_m", "retries", "settle_s"} <= ep["episode"].keys()
