@@ -517,7 +517,9 @@ def smooth(s: float) -> float:
 # jaws close only once the block is between them.
 NOISE_TAU = 0.25  # s, correlation time of the grasp-point noise
 NOISE_CLIP = 0.025  # m, per axis
-NOISE_FADE = (0.015, 0.04)  # m above the grasp: no noise below the first, full above the second
+# Run 5 (T5-17): the noise reaches the block, so some descents end with a jaw on it or
+# 1-2 cm off; run 4 faded it out over (0.015, 0.04) m and seldom left such states.
+NOISE_FADE = (0.0, 0.005)  # m above the grasp: no noise below the first, full above the second
 TOP_HOLD = (0.1, 0.4)  # s above the block before going down, uniform
 DESCENT_TIME = (0.6, 0.8)  # s for the descent, uniform
 # Block centre off GRASP_POINT in the gripper frame (x closing, y across the jaws, z up)
@@ -525,8 +527,11 @@ DESCENT_TIME = (0.6, 0.8)  # s for the descent, uniform
 STRADDLE_TOL = np.array([0.006, 0.010, 0.008])
 SETTLE_MIN = 0.1  # s at the bottom before the first straddle check can close
 SETTLE_MAX = 0.5  # s waiting to straddle before going up and coming down again
-RETRY_RISE = 1.0  # share of the approach height risen for a retry (clears a jaw on the block)
-MAX_RETRIES = 1
+RETRY_RISE = 0.02  # m risen from where the gripper is (clears a jaw resting on the block)
+RISE_TIME = 0.2  # s for that rise
+RECENTRE_TIME = 0.2  # s to move over the re-planned grasp at the risen height
+REDESCENT_TIME = 0.3  # s back down, clean
+MAX_RETRIES = 2
 
 Label = Callable[[PhysWorld, np.ndarray, np.ndarray], None]
 
@@ -539,6 +544,7 @@ class NoisyPickResult:
     retries: int = 0  # times it went up and came down again
     settle_ticks: int = 0  # ticks waited at the bottom before closing (all tries)
     noisy: bool = True  # False when the grasp needed vias or the high stage (run clean)
+    landed_on_block: int = 0  # bottoms where a jaw rested on the block (jaw_on_block)
 
 
 def grasp_error(world: PhysWorld, i: int) -> np.ndarray:
@@ -554,6 +560,12 @@ def straddles(world: PhysWorld, i: int, tol: np.ndarray = STRADDLE_TOL) -> bool:
     return bool(np.all(np.abs(grasp_error(world, i)) <= tol))
 
 
+def jaw_on_block(world: PhysWorld, i: int, tol: np.ndarray = STRADDLE_TOL) -> bool:
+    """True when the gripper sits too high over block i (grasp_error z below -tol z), as it
+    does when a jaw rests on the block instead of beside it."""
+    return bool(grasp_error(world, i)[2] < -tol[2])
+
+
 def _fade(height: float) -> float:
     lo, hi = NOISE_FADE
     return float(np.clip((height - lo) / (hi - lo), 0.0, 1.0))
@@ -567,11 +579,13 @@ def noisy_pick(
 
     Over the pause above the block and the descent, the executed command puts the grasp
     point off the planned one by an Ornstein-Uhlenbeck offset (sigma m per axis, faded out
-    over the last NOISE_FADE of the descent); on_tick(world, executed, label) gets both, and
-    the label is the noise-free command. At the bottom it holds the grasp pose (no noise)
-    and closes on the first tick the jaws straddle the block (after SETTLE_MIN); if they
-    don't within SETTLE_MAX it rises, re-plans for where the block is now and comes down
-    again without noise (up to MAX_RETRIES). Grasps through vias or from the high stage run as pick()."""
+    only over the last NOISE_FADE[1], so it reaches the block); on_tick(world, executed,
+    label) gets both, and the label is the noise-free command. At the bottom it waits
+    SETTLE_MIN with the noise still on and closes if the jaws straddle the block. If not (a
+    jaw on the block, or off along an axis) it rises RETRY_RISE from where it is, re-plans
+    for where the block is now, comes down without noise and closes on the first tick the
+    jaws straddle (after SETTLE_MIN, waiting up to SETTLE_MAX); up to MAX_RETRIES times.
+    Every tick from the rise on is executed as labelled. Grasps through vias or from the high stage run as pick()."""
     grasp = plan_grasp(world, i)
     if grasp is None:
         return NoisyPickResult(False, 0, "out of reach", noisy=False)
@@ -579,7 +593,7 @@ def noisy_pick(
         result = pick(world, i, lambda w, c: on_tick(w, c, c))
         return NoisyPickResult(result.success, result.steps, result.reason, noisy=False)
     ik = Ik(world)
-    ticks = settle = retries = 0
+    ticks = settle = retries = on_block = 0
     noise = np.zeros(3)
     amplitude = sigma  # 0 on a retry: the second descent is clean
     decay = CONTROL_DT / NOISE_TAU
@@ -629,25 +643,43 @@ def noisy_pick(
             settle += 1
         return straddles(world, i)
 
+    def landed_ok(q: np.ndarray, jaw: float) -> bool:
+        """After the noisy descent: let the arm settle with the noise still on, then judge the
+        state it reached. The label is already the clean grasp pose."""
+        nonlocal settle
+        for _ in range(round(SETTLE_MIN / CONTROL_DT)):
+            noisy(q, jaw, 0.0)
+            settle += 1
+        return straddles(world, i)
+
+    def rise() -> None:
+        """Straight up RETRY_RISE from the commanded pose, clean (executed = label)."""
+        now = world.ctrl()
+        point, r = ik.grasp_pose(now[:N_ARM])
+        up, _, _ = ik.solve(point + np.array([0.0, 0.0, RETRY_RISE]), r, now[:N_ARM], iters=40)
+        ramp(up, RISE_TIME, now[N_ARM])
+
     path = np.array([pose.q for pose in grasp.path])
     ramp(grasp.above.q, 1.2, grasp.jaw)
     for _ in range(round(rng.uniform(*TOP_HOLD) / CONTROL_DT)):
         noisy(grasp.above.q, grasp.jaw, APPROACH)
     descend(path, 1.0, rng.uniform(*DESCENT_TIME), grasp.jaw)
-    while not settle_ok(path[0], grasp.jaw):
+    ok = landed_ok(path[0], grasp.jaw)
+    while not ok:
+        on_block += jaw_on_block(world, i)
         if retries == MAX_RETRIES:
-            return NoisyPickResult(False, ticks, "no straddle", retries, settle)
+            return NoisyPickResult(False, ticks, "no straddle", retries, settle, True, on_block)
         retries += 1
         amplitude = 0.0
-        n = round(0.3 / CONTROL_DT)
-        for t in range(1, n + 1):  # straight up, clean
-            tick(np.append(along(path, RETRY_RISE * smooth(t / n)), grasp.jaw))
-        again = plan_grasp(world, i)
+        rise()
+        again = plan_grasp(world, i)  # re-centre on where the block is now
         if again is None or again.vias or again.height != APPROACH:
-            return NoisyPickResult(False, ticks, "no re-plan", retries, settle)
+            return NoisyPickResult(False, ticks, "no re-plan", retries, settle, True, on_block)
         grasp, path = again, np.array([pose.q for pose in again.path])
-        ramp(along(path, RETRY_RISE), 0.3, grasp.jaw)
-        descend(path, RETRY_RISE, 0.5, grasp.jaw)
+        top = RETRY_RISE / APPROACH
+        ramp(along(path, top), RECENTRE_TIME, grasp.jaw)
+        descend(path, top, REDESCENT_TIME, grasp.jaw)
+        ok = settle_ok(path[0], grasp.jaw)
     ramp(path[0], 0.3, JAW_CLOSED)
     hold(0.2)
     n = round(APPROACH / LIFT_SPEED / CONTROL_DT)
@@ -655,8 +687,8 @@ def noisy_pick(
         tick(np.append(along(path, smooth(t / n)), JAW_CLOSED))
     hold(0.1)
     if not world.lifted(i, LIFT_HEIGHT):
-        return NoisyPickResult(False, ticks, "not lifted", retries, settle)
+        return NoisyPickResult(False, ticks, "not lifted", retries, settle, True, on_block)
     hold(HOLD_TIME)
     if not world.lifted(i, LIFT_HEIGHT):
-        return NoisyPickResult(False, ticks, "dropped", retries, settle)
-    return NoisyPickResult(True, ticks, "", retries, settle)
+        return NoisyPickResult(False, ticks, "dropped", retries, settle, True, on_block)
+    return NoisyPickResult(True, ticks, "", retries, settle, True, on_block)

@@ -636,3 +636,53 @@ End to end, same 200 trials and grounder choices as runs 2 and 3 (out/e2e/run4):
 | words (no ring) | - | 0.01 | 0.01 | 0.03 | 0.01 | 0.91 |
 | lora2 grounder | 0.945 | 0.42 | 0.46 | **0.52** | 0.02 | 0.47 |
 | oracle ring | 1.00 | 0.44 | 0.49 | **0.53** | 0.00 | 0.48 |
+
+## SmolVLA run 5 (T5-17)
+
+Run 4 mostly missed by closing 2-3 cm high with a jaw resting on the block, 1-2 cm off
+along the closing axis, and rarely retried: its noise faded out over the last 1.5-4 cm,
+so the data held few such states. Run 5 changes the demonstrations only (expert.noisy_pick):
+- **Noise reaches the block**: the fade is now the last 5 mm only, so some descents end
+  with a jaw on the block or 1-2 cm off.
+- **The expert recovers from those states**: after 0.1 s at the bottom (noise still on) it
+  closes if the jaws straddle the block (expert.straddles); otherwise it rises 2 cm from
+  where it is, re-plans for where the block is now, re-centres, comes down clean and
+  closes on the first straddling tick (up to 2 retries). From the rise on, every tick is
+  executed as labelled, so the labels are the expert's corrective commands.
+- **Early closes**: none of the run-4 demos closes before frame 21, so the data does not
+  explain run 4's closes at frames 5-10; no guard was added.
+
+Data: out/demos800b, seeds 7000-8012 (1,013 attempts: 149 expert failures and 64 episodes
+over the 60-frame horizon skipped), 800 episodes, 35,996 frames, mean 45. 278 episodes
+(35%) include a retry (6 with two), 55 landed with a jaw on the block (expert.jaw_on_block).
+Varied wording, wrist camera, 256x256. Run-4 settings (chunk 30, 10 actions per call,
+bf16, batch 32), 12,000 steps in 178 min, exited cleanly. Held-out loss 0.199 (run 4: 0.178;
+labels are not the executed path, so neither is comparable with run 3). Run 2026-11-01.
+
+T5-08 evaluation, 100 unseen scenes (seed 50000), final checkpoints:
+
+| condition | run 2: target | run 3: target | run 4: target | **run 5: target** | **run 5: partner** | run 5: other | run 5: nothing |
+|---|---|---|---|---|---|---|---|
+| ring on target, words name it | 0.42 | 0.45 | 0.50 | **0.57** | 0.00 | 0.00 | 0.43 |
+| words only, no ring | - | 0.00 | 0.03 | 0.04 | 0.01 | 0.02 | 0.93 |
+| ring on partner, words name target | - | 0.00 | 0.00 | 0.00 | **0.60** | 0.00 | 0.40 |
+
+**Gate (fixed before training): FAIL**, on the first line:
+- ring on target: target picks 0.57 against a bar of 0.60. Not met.
+- ring on partner: partner picks 0.60 > target picks 0.00. Met.
+- words only: target picks 0.04 < 0.57. Met.
+
+0.50 -> 0.57 is the largest step so far but still about 1.4 standard errors. The
+diagnosis (same 30 scenes; scripts/smolvla_diag.py, out/smolvla/diag_run5.json) gives 16
+hits, as in run 4; of the 14 misses, 6 closed 1.5-3.5 cm high with the fixed jaw or
+gripper on the block (run 4: 8), 4 closed low but 1-2 cm off sideways, 1 in mid-air and
+3 very early (frames 0-10, far from the block; run 4 also had 3). 6 misses closed more
+than once, so some re-tries happen, but none turned into a pick on these scenes.
+
+End to end, same 200 trials and grounder choices as runs 2-4 (out/e2e/run5):
+
+| setup | grounding | run 2 | run 3 | run 4 | **run 5: target** | run 5: partner | run 5: nothing |
+|---|---|---|---|---|---|---|---|
+| words (no ring) | - | 0.01 | 0.01 | 0.03 | 0.04 | 0.005 | 0.895 |
+| lora2 grounder | 0.945 | 0.42 | 0.46 | 0.52 | **0.57** | 0.015 | 0.415 |
+| oracle ring | 1.00 | 0.44 | 0.49 | 0.53 | **0.57** | 0.00 | 0.43 |
