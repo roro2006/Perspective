@@ -59,11 +59,12 @@ from curio_robot.sim.expert import (
     N_ARM,
     SUBSTEPS,
     Grasp,
-    _along,
-    _Ik,
-    _smooth,
+    Ik,
+    along,
+    noisy_pick,
     pick,
     plan_grasp,
+    smooth,
 )
 from curio_robot.sim.physics import ARM_JOINTS, PhysWorld
 from curio_robot.types import HUMAN_CAM, ROBOT_CAM, CameraFrame
@@ -88,6 +89,10 @@ WRIST_ZNEAR_M = 0.005  # near clip for the wrist view: the fixed jaw is about 3 
 RECOVERY_OFFSET_M = (0.010, 0.025)  # grasp point off along the closing axis, uniform
 RECOVERY_FIXED_JAW_SHARE = 0.75  # offsets towards the fixed jaw (the side run 2 missed on)
 RECOVERY_CLOSE_SHARE = 0.5  # recoveries that first close where they landed
+
+# Noisy demos (T5-16, expert.noisy_pick): each episode's noise is noise * U(NOISE_SCALE) m.
+NOISE_SCALE = (0.3, 1.0)
+MAX_FRAMES = 60  # the evaluation horizon (smolvla_eval.HORIZON_S at FPS): longer demos are skipped
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +241,7 @@ def _observe(world: PhysWorld, i: int, wrist: bool) -> _Frame:
 def _shifted_path(world: PhysWorld, grasp: Grasp, offset: float) -> np.ndarray | None:
     """grasp's path with the grasp point moved offset (m) along the jaw closing axis, the
     gripper turned as before; None if the IK misses any pose by more than IK_POS_TOL."""
-    ik = _Ik(world)
+    ik = Ik(world)
     shifted = []
     for pose in grasp.path:
         ik.data.qpos[:N_ARM] = pose.q
@@ -285,13 +290,13 @@ def _recovery_pick(
         goal = np.append(target, jaw)
         n = max(1, round(seconds / CONTROL_DT))
         for t in range(1, n + 1):
-            tick(start + (goal - start) * _smooth(t / n))
+            tick(start + (goal - start) * smooth(t / n))
 
     def vertical(p: np.ndarray, down: bool, seconds: float, jaw: float) -> None:
         n = max(1, round(seconds / CONTROL_DT))
         for t in range(1, n + 1):
-            s = _smooth(t / n)
-            tick(np.append(_along(p, 1 - s if down else s), jaw))
+            s = smooth(t / n)
+            tick(np.append(along(p, 1 - s if down else s), jaw))
 
     def hold(seconds: float) -> None:
         for _ in range(round(seconds / CONTROL_DT)):
@@ -327,29 +332,42 @@ def _recovery_pick(
 def _run_episode(
     world: PhysWorld, scene: TaskScene, i: int, wrist: bool = True,
     recovery: np.random.Generator | None = None,
-) -> tuple[bool, str, list[_Frame], list[np.ndarray], int]:
-    """Reset to scene, pick block i (with recovery, a _recovery_pick using that generator),
-    return (success, reason, frames, actions, frames not to train on: the first ones)."""
+    noise: tuple[np.random.Generator, float] | None = None,
+) -> tuple[bool, str, list[_Frame], list[np.ndarray], int, dict]:
+    """Reset to scene, pick block i (with recovery, a _recovery_pick using that generator;
+    with noise (generator, sigma m), an expert.noisy_pick whose labels are recorded), return
+    (success, reason, frames, actions, frames not to train on: the first ones, extra
+    episode fields)."""
     world.reset(scene)
     frames = [_observe(world, i, wrist)]
     actions: list[np.ndarray] = []
     ticks = 0
 
-    def on_tick(w: PhysWorld, ctrl: np.ndarray) -> None:
+    def on_label(w: PhysWorld, executed: np.ndarray, label: np.ndarray) -> None:
         nonlocal ticks
         ticks += 1
         if ticks % TICKS_PER_FRAME == 0:
-            actions.append(ctrl.copy())
+            actions.append(label)
             frames.append(_observe(w, i, wrist))
 
-    if recovery is None:
+    def on_tick(w: PhysWorld, ctrl: np.ndarray) -> None:
+        on_label(w, ctrl, ctrl.copy())
+
+    extra: dict = {}
+    off_ticks = 0
+    if noise is not None:
+        result = noisy_pick(world, i, noise[0], noise[1], on_label)
+        success, reason = result.success, result.reason
+        extra = {"noise_m": round(noise[1], 4) if result.noisy else 0.0,
+                 "retries": result.retries,
+                 "settle_s": round(result.settle_ticks * CONTROL_DT, 2)}
+    elif recovery is None:
         success, reason = _plain(pick(world, i, on_tick))
-        off_ticks = 0
     else:
         success, reason, off_ticks = _recovery_pick(world, i, recovery, on_tick)
     actions.append(world.ctrl())  # the last frame holds
     # Frame f's action is the ctrl after tick 5(f+1): skip frames whose action is off target.
-    return success, reason, frames, actions, off_ticks // TICKS_PER_FRAME
+    return success, reason, frames, actions, off_ticks // TICKS_PER_FRAME, extra
 
 
 def _episode_seed_and_target(seed: int, attempt: int) -> tuple[int, TaskScene, int]:
@@ -411,6 +429,7 @@ def record(
     words: str = "fixed",
     wrist: bool = True,
     recovery: float = 0.0,
+    noise: float = 0.0,
 ) -> dict:
     """Record n_episodes expert picks into out_dir.
 
@@ -422,21 +441,31 @@ def record(
     overwrite. With wrist, every frame also stores the wrist camera image ("wrist").
     A share `recovery` of attempts (drawn from default_rng([episode seed, 11])) are
     recovery picks (_recovery_pick); their off-target frames carry "train": false.
-    Returns {"episodes", "frames", "attempts", "successes", "failed"}."""
+    With noise > 0 every attempt is an expert.noisy_pick with sigma noise * U(NOISE_SCALE)
+    (generator default_rng([episode seed, 13])), recording the expert's labels, and
+    episodes longer than MAX_FRAMES are skipped like failures ("too_long" counts them).
+    Returns {"episodes", "frames", "attempts", "successes", "failed", "too_long"}."""
     out_dir = Path(out_dir)
     _prepare(out_dir, overwrite)
     world = PhysWorld(width, height)
     episodes: list[dict] = []
-    attempts = successes = total_frames = 0
+    attempts = successes = total_frames = too_long = 0
     try:
         while len(episodes) < n_episodes and attempts < MAX_ATTEMPTS_PER_EPISODE * n_episodes:
             episode_seed, scene, i = _episode_seed_and_target(seed, attempts)
             attempts += 1
             rng = np.random.default_rng([episode_seed, 11])
             recover = rng if rng.random() < recovery else None
-            success, reason, frames, actions, skip = _run_episode(
-                world, scene, i, wrist, recover)
+            noisy = None
+            if noise > 0:
+                noise_rng = np.random.default_rng([episode_seed, 13])
+                noisy = (noise_rng, noise * noise_rng.uniform(*NOISE_SCALE))
+            success, reason, frames, actions, skip, extra = _run_episode(
+                world, scene, i, wrist, recover, noisy)
             successes += success
+            if noise > 0 and len(frames) > MAX_FRAMES:
+                too_long += 1
+                continue
             if not success and not include_failed:
                 continue
             index = len(episodes)
@@ -460,6 +489,7 @@ def record(
                 "length": len(frames),
                 **({"recovery": recover is not None, "skipped_frames": skip}
                    if recovery else {}),
+                **extra,
             })
     finally:
         world.close()
@@ -479,6 +509,7 @@ def record(
         "seed": seed,
         "include_failed": include_failed,
         "recovery": recovery,
+        **({"noise": noise} if noise else {}),
     }
     (out_dir / "meta" / "info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
     return {
@@ -487,6 +518,7 @@ def record(
         "attempts": attempts,
         "successes": successes,
         "failed": attempts - successes,
+        "too_long": too_long,
     }
 
 

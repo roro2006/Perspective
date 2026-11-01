@@ -100,7 +100,7 @@ class Grasp:
         return self.path[-1]
 
 
-class _Ik:
+class Ik:
     """Damped least squares on a private MjData, so the world is untouched.
 
     The model is a copy whose box has a CLEARANCE collision margin, so the
@@ -167,6 +167,13 @@ class _Ik:
         axis = float(np.arccos(np.clip(abs(r[:, 0] @ target[:, 0]), -1, 1)))
         return d.qpos[:N_ARM].copy(), float(np.linalg.norm(ep)), axis
 
+    def grasp_pose(self, q: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Where GRASP_POINT is (world, m) and the gripper body rotation with the arm at q."""
+        self.data.qpos[:N_ARM] = q[:N_ARM]
+        mujoco.mj_kinematics(self.model, self.data)
+        r = self.data.xmat[self.body].reshape(3, 3).copy()
+        return self.data.xpos[self.body] + r @ GRASP_POINT, r
+
 
 def jaw_frame(yaw: float, tilt: float = 0.0, outward: np.ndarray | None = None) -> np.ndarray:
     """Gripper body rotation: x (jaw closing) horizontal along yaw, z up (the
@@ -191,7 +198,7 @@ def _seed(xy: np.ndarray) -> np.ndarray:
 
 
 def _reach(
-    ik: _Ik, pos: np.ndarray, yaw: float, outward: np.ndarray, seed: np.ndarray,
+    ik: Ik, pos: np.ndarray, yaw: float, outward: np.ndarray, seed: np.ndarray,
     min_tilt: float = 0.0, tilts: np.ndarray = TILTS,
 ) -> tuple[Pose, float] | None:
     """The least-tilted pose (from min_tilt) with GRASP_POINT at pos and the
@@ -204,7 +211,7 @@ def _reach(
 
 
 def _path(
-    ik: _Ik, centre: np.ndarray, yaw: float, outward: np.ndarray, height: float,
+    ik: Ik, centre: np.ndarray, yaw: float, outward: np.ndarray, height: float,
     tilts: np.ndarray = TILTS,
 ) -> tuple[list[Pose], float] | None:
     """A pose every PATH_STEP up the vertical line from centre (the grasp) to
@@ -223,7 +230,7 @@ def _path(
     return path, at[1]
 
 
-def _ramp_hits(ik: _Ik, start: np.ndarray, q: np.ndarray, jaw: float) -> int:
+def _ramp_hits(ik: Ik, start: np.ndarray, q: np.ndarray, jaw: float) -> int:
     """Contacts on the joint-space move from ctrl start to pre-grasp q.
 
     A box can be placed against the parked arm; contacts the move starts in
@@ -281,7 +288,7 @@ def _via_chains(
 
 
 def _approach(
-    ik: _Ik, start: np.ndarray, above: np.ndarray, jaw: float
+    ik: Ik, start: np.ndarray, above: np.ndarray, jaw: float
 ) -> tuple[tuple[np.ndarray, ...], int]:
     """The move from ctrl start to the pre-grasp above: straight in joint
     space if that is clear, else the _via_chains way that touches least.
@@ -391,7 +398,7 @@ def plan_grasp(world: PhysWorld, i: int) -> Grasp | None:
     centre = world.block_position(i)
     outward = np.array([centre[0], centre[1], 0.0])
     outward /= np.linalg.norm(outward)
-    ik = _Ik(world)
+    ik = Ik(world)
     start = _start(world)
     block = world.block_ids()[i]
     best: tuple[tuple, Grasp] | None = None
@@ -423,7 +430,7 @@ def plan_grasp(world: PhysWorld, i: int) -> Grasp | None:
 
 
 def _blocked_at(
-    ik: _Ik, pos: np.ndarray, yaw: float, outward: np.ndarray, stage: _Stage, block: int
+    ik: Ik, pos: np.ndarray, yaw: float, outward: np.ndarray, stage: _Stage, block: int
 ) -> bool:
     """True if the stage prechecks and the jaws can't be around the block
     without a contact at any of the openings: a quick test before planning
@@ -456,14 +463,14 @@ def pick(world: PhysWorld, i: int, on_tick: Tick | None = None) -> PickResult:
         goal = np.append(target, jaw)
         n = max(1, round(seconds / CONTROL_DT))
         for t in range(1, n + 1):
-            tick(start + (goal - start) * _smooth(t / n))
+            tick(start + (goal - start) * smooth(t / n))
 
     def vertical(down: bool, seconds: float, jaw: float) -> None:
         # Joint-space blend between poses PATH_STEP apart: close to a straight line.
         n = max(1, round(seconds / CONTROL_DT))
         for t in range(1, n + 1):
-            s = _smooth(t / n)
-            tick(np.append(_along(path, 1 - s if down else s), jaw))
+            s = smooth(t / n)
+            tick(np.append(along(path, 1 - s if down else s), jaw))
 
     def hold(seconds: float) -> None:
         for _ in range(round(seconds / CONTROL_DT)):
@@ -490,13 +497,166 @@ def pick(world: PhysWorld, i: int, on_tick: Tick | None = None) -> PickResult:
     return PickResult(True, len(log), np.array(log))
 
 
-def _along(path: np.ndarray, s: float) -> np.ndarray:
+def along(path: np.ndarray, s: float) -> np.ndarray:
     """Piecewise-linear point at fraction s (0: path[0], 1: path[-1])."""
     x = np.clip(s, 0.0, 1.0) * (len(path) - 1)
     k = min(int(x), len(path) - 2)
     return path[k] + (path[k + 1] - path[k]) * (x - k)
 
 
-def _smooth(s: float) -> float:
+def smooth(s: float) -> float:
     """Smoothstep: zero velocity at both ends of a ramp."""
     return s * s * (3 - 2 * s)
+
+
+# ---- noisy-descent demonstrations with a state-checked close (task T5-16) ----------------
+# Run 3's policy closed in mid-air: its demos always closed at the same moment of a clean
+# descent, so "when" was learnable from time alone. Here the executed arm command carries
+# correlated noise on the way down (DART: the recorded label stays the expert's own command,
+# which pulls back to the path), the pause above and the descent vary in length, and the
+# jaws close only once the block is between them.
+NOISE_TAU = 0.25  # s, correlation time of the grasp-point noise
+NOISE_CLIP = 0.025  # m, per axis
+NOISE_FADE = (0.015, 0.04)  # m above the grasp: no noise below the first, full above the second
+TOP_HOLD = (0.1, 0.4)  # s above the block before going down, uniform
+DESCENT_TIME = (0.6, 0.8)  # s for the descent, uniform
+# Block centre off GRASP_POINT in the gripper frame (x closing, y across the jaws, z up)
+# within which the jaws straddle it. Clean picks close within about 2 mm of it.
+STRADDLE_TOL = np.array([0.006, 0.010, 0.008])
+SETTLE_MIN = 0.1  # s at the bottom before the first straddle check can close
+SETTLE_MAX = 0.5  # s waiting to straddle before going up and coming down again
+RETRY_RISE = 1.0  # share of the approach height risen for a retry (clears a jaw on the block)
+MAX_RETRIES = 1
+
+Label = Callable[[PhysWorld, np.ndarray, np.ndarray], None]
+
+
+@dataclass(frozen=True, slots=True)
+class NoisyPickResult:
+    success: bool
+    ticks: int
+    reason: str = ""
+    retries: int = 0  # times it went up and came down again
+    settle_ticks: int = 0  # ticks waited at the bottom before closing (all tries)
+    noisy: bool = True  # False when the grasp needed vias or the high stage (run clean)
+
+
+def grasp_error(world: PhysWorld, i: int) -> np.ndarray:
+    """Block i's centre relative to GRASP_POINT, in the gripper body frame (m; x is the jaw
+    closing axis): zero when the block sits where the grasp wants it."""
+    body = world.model.body("gripper").id
+    r = world.data.xmat[body].reshape(3, 3)
+    return r.T @ (world.block_position(i) - world.data.xpos[body]) - GRASP_POINT
+
+
+def straddles(world: PhysWorld, i: int, tol: np.ndarray = STRADDLE_TOL) -> bool:
+    """True when the open jaws are around block i: grasp_error within tol on every axis."""
+    return bool(np.all(np.abs(grasp_error(world, i)) <= tol))
+
+
+def _fade(height: float) -> float:
+    lo, hi = NOISE_FADE
+    return float(np.clip((height - lo) / (hi - lo), 0.0, 1.0))
+
+
+def noisy_pick(
+    world: PhysWorld, i: int, rng: np.random.Generator, sigma: float, on_tick: Label
+) -> NoisyPickResult:
+    """Pick block i as pick() does, with DART-style noise on the way down and a close that
+    waits for the jaws to straddle the block.
+
+    Over the pause above the block and the descent, the executed command puts the grasp
+    point off the planned one by an Ornstein-Uhlenbeck offset (sigma m per axis, faded out
+    over the last NOISE_FADE of the descent); on_tick(world, executed, label) gets both, and
+    the label is the noise-free command. At the bottom it holds the grasp pose (no noise)
+    and closes on the first tick the jaws straddle the block (after SETTLE_MIN); if they
+    don't within SETTLE_MAX it rises, re-plans for where the block is now and comes down
+    again without noise (up to MAX_RETRIES). Grasps through vias or from the high stage run as pick()."""
+    grasp = plan_grasp(world, i)
+    if grasp is None:
+        return NoisyPickResult(False, 0, "out of reach", noisy=False)
+    if grasp.vias or grasp.height != APPROACH:
+        result = pick(world, i, lambda w, c: on_tick(w, c, c))
+        return NoisyPickResult(result.success, result.steps, result.reason, noisy=False)
+    ik = Ik(world)
+    ticks = settle = retries = 0
+    noise = np.zeros(3)
+    amplitude = sigma  # 0 on a retry: the second descent is clean
+    decay = CONTROL_DT / NOISE_TAU
+
+    def tick(label: np.ndarray, executed: np.ndarray | None = None) -> None:
+        nonlocal ticks
+        ticks += 1
+        executed = label if executed is None else executed
+        world.step(executed, SUBSTEPS)
+        on_tick(world, executed.copy(), label.copy())
+
+    def noisy(q: np.ndarray, jaw: float, height: float) -> None:
+        nonlocal noise
+        if amplitude == 0.0:
+            tick(np.append(q, jaw))
+            return
+        noise = noise * (1 - decay) + amplitude * np.sqrt(2 * decay) * rng.standard_normal(3)
+        noise = np.clip(noise, -NOISE_CLIP, NOISE_CLIP)
+        point, r = ik.grasp_pose(q)
+        moved, err, _ = ik.solve(point + noise * _fade(height), r, q, iters=30)
+        tick(np.append(q, jaw), np.append(moved if err <= IK_POS_TOL else q, jaw))
+
+    def ramp(target: np.ndarray, seconds: float, jaw: float) -> None:
+        start = world.ctrl()
+        goal = np.append(target, jaw)
+        n = max(1, round(seconds / CONTROL_DT))
+        for t in range(1, n + 1):
+            tick(start + (goal - start) * smooth(t / n))
+
+    def hold(seconds: float) -> None:
+        for _ in range(round(seconds / CONTROL_DT)):
+            tick(world.ctrl())
+
+    def descend(path: np.ndarray, top: float, seconds: float, jaw: float) -> None:
+        """Noisy, from fraction top of the path (1: the pre-grasp) down to the grasp."""
+        n = max(1, round(seconds / CONTROL_DT))
+        for t in range(1, n + 1):
+            s = top * (1 - smooth(t / n))
+            noisy(along(path, s), jaw, s * APPROACH)
+
+    def settle_ok(q: np.ndarray, jaw: float) -> bool:
+        nonlocal settle
+        for k in range(round(SETTLE_MAX / CONTROL_DT)):
+            if k >= round(SETTLE_MIN / CONTROL_DT) and straddles(world, i):
+                return True
+            tick(np.append(q, jaw))
+            settle += 1
+        return straddles(world, i)
+
+    path = np.array([pose.q for pose in grasp.path])
+    ramp(grasp.above.q, 1.2, grasp.jaw)
+    for _ in range(round(rng.uniform(*TOP_HOLD) / CONTROL_DT)):
+        noisy(grasp.above.q, grasp.jaw, APPROACH)
+    descend(path, 1.0, rng.uniform(*DESCENT_TIME), grasp.jaw)
+    while not settle_ok(path[0], grasp.jaw):
+        if retries == MAX_RETRIES:
+            return NoisyPickResult(False, ticks, "no straddle", retries, settle)
+        retries += 1
+        amplitude = 0.0
+        n = round(0.3 / CONTROL_DT)
+        for t in range(1, n + 1):  # straight up, clean
+            tick(np.append(along(path, RETRY_RISE * smooth(t / n)), grasp.jaw))
+        again = plan_grasp(world, i)
+        if again is None or again.vias or again.height != APPROACH:
+            return NoisyPickResult(False, ticks, "no re-plan", retries, settle)
+        grasp, path = again, np.array([pose.q for pose in again.path])
+        ramp(along(path, RETRY_RISE), 0.3, grasp.jaw)
+        descend(path, RETRY_RISE, 0.5, grasp.jaw)
+    ramp(path[0], 0.3, JAW_CLOSED)
+    hold(0.2)
+    n = round(APPROACH / LIFT_SPEED / CONTROL_DT)
+    for t in range(1, n + 1):
+        tick(np.append(along(path, smooth(t / n)), JAW_CLOSED))
+    hold(0.1)
+    if not world.lifted(i, LIFT_HEIGHT):
+        return NoisyPickResult(False, ticks, "not lifted", retries, settle)
+    hold(HOLD_TIME)
+    if not world.lifted(i, LIFT_HEIGHT):
+        return NoisyPickResult(False, ticks, "dropped", retries, settle)
+    return NoisyPickResult(True, ticks, "", retries, settle)
