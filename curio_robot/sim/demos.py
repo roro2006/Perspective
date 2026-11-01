@@ -360,6 +360,7 @@ def _run_episode(
         success, reason = result.success, result.reason
         extra = {"noise_m": round(noise[1], 4) if result.noisy else 0.0,
                  "retries": result.retries,
+                 "on_block": result.landed_on_block,
                  "settle_s": round(result.settle_ticks * CONTROL_DT, 2)}
     elif recovery is None:
         success, reason = _plain(pick(world, i, on_tick))

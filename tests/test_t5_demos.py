@@ -221,3 +221,28 @@ def test_noisy_demos_stay_within_the_horizon(tmp_path):
         ep = load_episode(tmp_path, i)
         assert len(ep["frames"]) <= MAX_FRAMES
         assert {"noise_m", "retries", "settle_s"} <= ep["episode"].keys()
+
+
+def test_noisy_pick_rises_and_retries_clean_when_it_lands_off():
+    rng = np.random.default_rng(3000)
+    scene = fetch_scene(rng)
+    i = int(rng.integers(0, len(scene.blocks)))
+    world = PhysWorld(W, H)
+    try:
+        for noise_seed in range(20):
+            world.reset(scene)
+            log = []
+            result = expert.noisy_pick(
+                world, i, np.random.default_rng(noise_seed), 0.012,
+                lambda w, executed, label, log=log: log.append((executed, label)),
+            )
+            if result.retries:
+                break
+    finally:
+        world.close()
+    assert result.retries >= 1, "no noise seed landed off the block"
+    noisy = [k for k, (ex, lab) in enumerate(log) if np.abs(ex - lab).max() > 1e-6]
+    first_close = next(k for k, (_, lab) in enumerate(log) if lab[5] < expert.JAW_OPEN)
+    # the rise, re-centre, clean descent and close are all executed as labelled
+    assert noisy and noisy[-1] < first_close
+    assert result.landed_on_block <= result.retries
