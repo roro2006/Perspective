@@ -1,7 +1,7 @@
 ---
 id: T5-18
 title: Simulation-only proof-of-concept video (six scenes, real zero-shot grounding)
-status: todo
+status: done
 agent: claude
 depends: [T5-17]
 owns: [scripts/poc/kit.py, scripts/poc/robots.py, scripts/poc/scene_base.py, scripts/poc/scenes_a.py, scripts/poc/scenes_b.py, scripts/poc/compose.py, scripts/poc/make_video.py, scripts/poc/encode_cv2.py, tests/test_t5_poc.py, tasks/T5-18-poc-video.md, tasks/notes/T5-18.md]
