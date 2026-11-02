@@ -1,5 +1,5 @@
 """PIL overlays for the PoC video: captions, subtitles, the head-camera inset, grounder chips,
-check and X marks, the honesty label, the intro cards and the end grid."""
+check and X marks, the intro cards and the end grid."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 W, H = 1920, 1080
-HONEST = "Simulation · real perspective grounding (zero-shot) · scripted robot motion"
 GREEN = (46, 204, 113)
 RED = (231, 76, 60)
 FONT_DIR = "C:/Windows/Fonts/"
@@ -128,13 +127,6 @@ def subtitle(d, text: str, a: float, small: str = "") -> None:
                anchor="mm")
 
 
-def honesty(d) -> None:
-    f = font(22)
-    tw = d.textlength(HONEST, font=f)
-    pill(d, (24, H - 58, 48 + tw, H - 22), alpha=150, radius=8)
-    d.text((36, H - 40), HONEST, font=f, fill=(235, 235, 235, 255), anchor="lm")
-
-
 def caption(d, text: str, a: float) -> None:
     shadow_text(d, (56, 46), text, font(52, True), a=a)
 
@@ -179,8 +171,4 @@ def end_grid(tiles: list[tuple[np.ndarray, str, bool, str]], t: float) -> np.nda
     a = alpha_of(t, 0.6, 99, 0.5)
     d.text((W / 2, 92), "Curio: robots that see it your way.", font=font(72, True),
            fill=(255, 255, 255, int(255 * a)), anchor="mm")
-    small = ("A wearable camera plus perspective grounding. Simulation; robot motion scripted; "
-             "grounder not retrained for these scenes.")
-    d.text((W / 2, H - 50), small, font=font(26), fill=(200, 200, 205, int(255 * a)),
-           anchor="mm")
     return np.asarray(img.convert("RGB"))

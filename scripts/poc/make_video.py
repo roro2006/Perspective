@@ -158,7 +158,6 @@ def overlay(sim: Sim, rgb: np.ndarray, t: float, events, images, answers) -> Ima
                 px = (float(np.clip(px[0], 80, C.W - 80)), float(np.clip(px[1], 200, C.H - 260)))
                 r = 30 + 18 * min(1.0, (t - e.t0) / 0.25)
                 C.check_mark(d, px, int(r), e.good, a)
-    C.honesty(d)
     base.alpha_composite(lay)
     return base
 
@@ -215,7 +214,6 @@ def explainer(sinks, stills: bool) -> None:
         C.pill(d, (C.W / 2 - tw / 2 - 30, C.H - 178, C.W / 2 + tw / 2 + 30, C.H - 98), a2)
         d.text((C.W / 2, C.H - 138), txt, font=f, fill=(255, 255, 255, int(255 * a2)),
                anchor="mm")
-        C.honesty(d)
         base.alpha_composite(lay)
         frame = np.asarray(base.convert("RGB"))
         if stills:
