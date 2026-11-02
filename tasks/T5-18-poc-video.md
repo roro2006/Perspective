@@ -4,7 +4,7 @@ title: Simulation-only proof-of-concept video (six scenes, real zero-shot ground
 status: todo
 agent: claude
 depends: [T5-17]
-owns: [scripts/poc/, tests/test_t5_poc.py, tasks/T5-18-poc-video.md, tasks/notes/T5-18.md]
+owns: [scripts/poc/kit.py, scripts/poc/robots.py, scripts/poc/scene_base.py, scripts/poc/scenes_a.py, scripts/poc/scenes_b.py, scripts/poc/compose.py, scripts/poc/make_video.py, scripts/poc/encode_cv2.py, tests/test_t5_poc.py, tasks/T5-18-poc-video.md, tasks/notes/T5-18.md]
 reads: [curio_robot/grounding/prompt.py, curio_robot/grounding/marks.py, curio_robot/grounding/client.py, curio_robot/bench/conditions.py, curio_robot/types.py, curio_robot/perspective.py, docs/bringup-7900xt.md]
 accept: uv run pytest -q tests/test_t5_poc.py
 ---
