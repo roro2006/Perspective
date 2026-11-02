@@ -1,7 +1,7 @@
 ---
 id: T5-19
 title: Versatility reel, a second simulation video (nine scenes, two with live grounding)
-status: todo
+status: done
 agent: claude
 depends: [T5-18]
 owns: [scripts/poc/reel_kit.py, scripts/poc/reel_scenes_a.py, scripts/poc/reel_scenes_b.py, scripts/poc/make_reel.py, tests/test_t5_reel.py, tasks/T5-19-versatility-reel.md, tasks/notes/T5-19.md]
