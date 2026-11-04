@@ -1,7 +1,7 @@
 ---
 id: T5-25
 title: Theory of mind, retested on items where the current view really disagrees
-status: todo
+status: done
 agent: claude
 budget: 80000
 depends: [T5-21]
