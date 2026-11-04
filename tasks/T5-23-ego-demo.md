@@ -1,7 +1,7 @@
 ---
 id: T5-23
 title: Teach by doing through the head camera (ego demo -> person-frame plan -> robot repeats)
-status: todo
+status: done
 agent: claude
 budget: 100000
 depends: [T5-04, T5-20]
