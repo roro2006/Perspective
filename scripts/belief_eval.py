@@ -1,10 +1,12 @@
 """Score belief-aware grounding against the current-state-only pipeline on false-belief
-scenes and true-belief controls, and check the card's gate. Task T5-21.
+scenes and true-belief controls, and check the card's gate. Tasks T5-21 and T5-25.
 
     uv run python scripts/belief_eval.py --url http://127.0.0.1:8081/v1 --out out/t5_21
+    uv run python scripts/belief_eval.py --split --out out/t5_25
 
-Needs llama-server with the r16 v2 adapter (docs/bringup-7900xt.md). Items are generated
-from belief_bench.SEEDS; every grounder call is logged in <out>/gate.json."""
+Needs llama-server with the r16 v2 adapter (docs/bringup-7900xt.md). Items come from
+belief_bench.SEEDS, or with --split (T5-25) from SPLIT_SEEDS with split side labels plus
+the tied-label set (TIED_SEED, reported only). Every answer is logged in <out>/gate.json."""
 
 from __future__ import annotations
 
@@ -32,6 +34,9 @@ def evaluate(items: list[bb.BeliefItem], grounder: bb.Grounder) -> list[dict]:
         }.get(item.kind, ("current", "belief"))
         row = {
             "id": item.id, "kind": item.kind, "text": item.text, "frame": item.frame,
+            "set": "tied" if item.id.startswith("tied-") else item.kind,
+            "words_pick": bb.words_pick(item), "labels_split": bb.labels_split(item),
+            "label_redraws": item.label_redraws,
             "target": item.target_id, "moved": item.moved_id, "mover": item.mover,
             "away": item.away, "target_moved": item.target_moved,
         }
@@ -52,12 +57,15 @@ def summarise(rows: list[dict]) -> dict:
     def ok(kind: str, system: str, **where) -> list[bool]:
         return [
             r[system]["ok"] for r in rows
-            if r["kind"] == kind and all(r[k] == v for k, v in where.items())
+            if r["set"] == kind and all(r[k] == v for k, v in where.items())
         ]
+
+    def follows_words(kind: str) -> list[bool]:
+        return [r["current"]["chosen"] == r["words_pick"] for r in rows if r["set"] == kind]
 
     fb_b, fb_c = ok("false-belief", "belief"), ok("false-belief", "current")
     ct_b, ct_c, ct_r = ok("control", "belief"), ok("control", "current"), ok("control", "reference")
-    flags = [r["flag_ok"] for r in rows if r["kind"] in ("false-belief", "control")]
+    flags = [r["flag_ok"] for r in rows if r["set"] in ("false-belief", "control")]
     gap = bb.paired_diff_ci(fb_b, fb_c)
     r_name = "current" if sum(ct_c) >= sum(ct_r) else "reference"
     r_hits = ct_c if r_name == "current" else ct_r
@@ -72,8 +80,17 @@ def summarise(rows: list[dict]) -> dict:
                                 "control": bb.rate(ok("control", "belief-raw"))},
         "present": {"belief": bb.rate(ok("present", "belief")),
                     "current": bb.rate(ok("present", "current"))},
+        "current_follows_words": {"false_belief": bb.rate(follows_words("false-belief"))},
+        "label_redraws": {
+            k: sum(r["label_redraws"] for r in rows if r["set"] == k)
+            for k in ("false-belief", "control", "present", "tied")
+        },
         "breakdown_false_belief": {},
     }
+    if any(r["set"] == "tied" for r in rows):
+        s["tied"] = {"belief": bb.rate(ok("tied", "belief")),
+                     "current": bb.rate(ok("tied", "current"))}
+        s["current_follows_words"]["tied"] = bb.rate(follows_words("tied"))
     for key, values in (("target_moved", (True, False)), ("away", ("look-away", "leave")),
                         ("mover", ("robot", "person")), ("frame", ("speaker", "robot"))):
         for v in values:
@@ -115,8 +132,17 @@ def table(s: dict) -> str:
         (f"Ablation, belief-aware with the words as said: false-belief "
         f"{cell(s['belief_raw_ablation']['false_belief'])}, control "
         f"{cell(s['belief_raw_ablation']['control'])}"),
-        "",
+        (f"Current-state only picked the block the current words point to: false-belief "
+        f"{cell(s['current_follows_words']['false_belief'])}"),
+        f"Label redraws: {s['label_redraws']}",
     ]
+    if "tied" in s:
+        lines.append(
+            f"Tied-label set (reported only): belief-aware {cell(s['tied']['belief'])}, "
+            f"current-state only {cell(s['tied']['current'])}, current followed the words "
+            f"{cell(s['current_follows_words']['tied'])}"
+        )
+    lines.append("")
     lines += [f"{k}: {'PASS' if v else 'FAIL'}" for k, v in s["gate"].items()]
     return "\n".join(lines)
 
@@ -126,11 +152,19 @@ def main() -> None:
     parser.add_argument("--url", default="http://127.0.0.1:8081/v1")
     parser.add_argument("--out", type=Path, default=Path("out/t5_21"))
     parser.add_argument("--timeout", type=float, default=15.0)
+    parser.add_argument("--split", action="store_true",
+                        help="T5-25: split-label sets (SPLIT_SEEDS) plus the tied-label set")
     args = parser.parse_args()
 
     t0 = time.perf_counter()
     with SimWorld(320, 240) as world:
-        items = bb.generate(world)
+        if args.split:
+            items = bb.generate(world, split_labels=True) + bb.generate_tied(world)
+            seeds = {**bb.SPLIT_SEEDS, "tied": bb.TIED_SEED}
+            counts = {**bb.COUNTS, "tied": bb.TIED_COUNT}
+        else:
+            items = bb.generate(world)
+            seeds, counts = bb.SEEDS, bb.COUNTS
     print(f"{len(items)} items in {time.perf_counter() - t0:.0f} s")
     grounder = VllmGrounder(args.url, "qwen-vl", timeout_s=args.timeout)
     rows = evaluate(items, grounder)
@@ -138,7 +172,7 @@ def main() -> None:
     print(table(summary))
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "gate.json").write_text(
-        json.dumps({"summary": summary, "rows": rows, "seeds": bb.SEEDS, "counts": bb.COUNTS},
+        json.dumps({"summary": summary, "rows": rows, "seeds": seeds, "counts": counts},
                    indent=2),
         encoding="utf-8",
     )

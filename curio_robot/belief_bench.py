@@ -5,17 +5,23 @@ Timeline of every item: the person sits and sees every block; they look behind t
 leave; the robot or a second person moves one block of the target's pair (false-belief
 and present items) or nothing (controls); the person returns to the same seat and speaks
 at once. The return frame is the current view; the tracker sees it only after the
-request, so the request meets the belief from before the person left."""
+request, so the request meets the belief from before the person left.
+
+T5-25 adds split_labels: false-belief and present items are kept only when, after the
+move, the prompt gives the target and its partner different side labels in the words'
+frame, so the current view points clearly at the other block. The tied-label set keeps
+only the items where those labels match (reported, not gated)."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import numpy as np
 
 from curio_robot import perspective
-from curio_robot.belief import Belief, Grounder, Resolution, resolve, visible_ids
+from curio_robot.belief import Belief, Grounder, Resolution, ground_request, resolve, visible_ids
 from curio_robot.collab.tasks import TaskScene, apply_scene, fetch_scene, true_map
 from curio_robot.conventions.readings import Frame
 from curio_robot.sim.scenarios import MIN_GAP, _in_workspace, _random_xy
@@ -25,6 +31,10 @@ from curio_robot.types import HUMAN_CAM, CameraFrame, CameraPose, ObjectMap
 KINDS = ("false-belief", "control", "present")
 SEEDS = {"false-belief": 2101, "control": 2102, "present": 2103}  # disjoint from training
 COUNTS = {"false-belief": 120, "control": 120, "present": 60}
+SPLIT_SEEDS = {"false-belief": 2111, "control": 2112, "present": 2113}  # T5-25
+TIED_SEED = 2114  # T5-25: false-belief items whose post-move labels tie
+TIED_COUNT = 60
+LABEL_MODES = (None, "split", "tied")
 PAIR_BLOCKS = 4  # blocks 0..3 are fetch_scene's two same-colour pairs
 MIN_MOVE = 0.06  # a moved block ends at least this far from where it was, m
 RETURN_JITTER = 0.03  # the returning person's gaze point moves by up to this, m
@@ -78,6 +88,8 @@ class BeliefItem:
     observations: tuple[Observation, ...]  # what the tracker sees before the request
     truth: ObjectMap  # the table when the person speaks
     current: CameraFrame  # the person's head frame when they speak
+    side: str = ""  # "left" or "right", the relation in the words
+    label_redraws: int = 0  # draws rejected for their side labels before this one (T5-25)
 
     @property
     def target_moved(self) -> bool:
@@ -225,30 +237,107 @@ def _try_item(world: SimWorld, rng: np.random.Generator, kind: str, i: int) -> B
         ),
         truth=after,
         current=current,
+        side=side,
     )
 
 
-def make_item(world: SimWorld, rng: np.random.Generator, kind: str, i: int) -> BeliefItem:
+def pair_ids(item: BeliefItem) -> tuple[str, str]:
+    """(target, partner): the two blocks of the target's colour."""
+    color = next(o.color for o in item.truth.objects if o.object_id == item.target_id)
+    partner = next(
+        o.object_id for o in item.truth.by_color(color) if o.object_id != item.target_id
+    )
+    return item.target_id, partner
+
+
+def words_pick(item: BeliefItem) -> str:
+    """The block the words point to on the current table (the current view's answer)."""
+    color = next(o.color for o in item.truth.objects if o.object_id == item.target_id)
+    viewer = item.current.pose if item.frame == "speaker" else item.truth.robot_pose
+    return _pick_id(item.truth, color, item.side, viewer)
+
+
+def side_labels(item: BeliefItem) -> dict[str, str]:
+    """id -> side label in the words' frame, read from the request the current-state
+    system sends (belief.ground_request on the current view and the true map)."""
+    request = ground_request(item.text, item.truth, item.current)
+    who = "speaker's" if item.frame == "speaker" else "robot's"
+    text = request.messages[0]["content"][1]["text"]
+    labels = {}
+    for letter, oid in request.letters.items():
+        m = re.search(rf"^{letter}: \w+ \(.*?{who} (left|right)", text, re.MULTILINE)
+        if m:
+            labels[oid] = m.group(1)
+    return labels
+
+
+def labels_split(item: BeliefItem) -> bool | None:
+    """True if target and partner get different side labels, False if the same, None if
+    either is unlabelled."""
+    target, partner = pair_ids(item)
+    labels = side_labels(item)
+    if target not in labels or partner not in labels:
+        return None
+    return labels[target] != labels[partner]
+
+
+def _labels_ok(item: BeliefItem, labels: str | None) -> bool:
+    if labels is None or item.kind == "control":
+        return True
+    split = labels_split(item)
+    return split is True if labels == "split" else split is False
+
+
+def make_item(
+    world: SimWorld, rng: np.random.Generator, kind: str, i: int, labels: str | None = None
+) -> BeliefItem:
+    """One item; labels "split" or "tied" redraws (from the same rng) false-belief and
+    present items until the post-move side labels of target and partner differ or match.
+    Controls ignore labels."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind: {kind}")
+    if labels not in LABEL_MODES:
+        raise ValueError(f"unknown label mode: {labels}")
+    redraws = 0
     for _ in range(MAX_ATTEMPTS):
         item = _try_item(world, rng, kind, i)
-        if item is not None:
-            return item
+        if item is None:
+            continue
+        if not _labels_ok(item, labels):
+            redraws += 1
+            continue
+        return replace(item, label_redraws=redraws)
     raise RuntimeError(f"no {kind} item in {MAX_ATTEMPTS} attempts")
 
 
 def generate(
-    world: SimWorld, counts: dict[str, int] | None = None, seeds: dict[str, int] | None = None
+    world: SimWorld,
+    counts: dict[str, int] | None = None,
+    seeds: dict[str, int] | None = None,
+    split_labels: bool = False,
 ) -> list[BeliefItem]:
-    """Items kind by kind, each kind from its own rng (SEEDS), COUNTS by default."""
+    """Items kind by kind, each kind from its own rng, COUNTS by default. Seeds default to
+    SEEDS (T5-21), or SPLIT_SEEDS with split_labels (T5-25: false-belief and present items
+    need different post-move side labels for target and partner; controls as T5-21)."""
     counts = COUNTS if counts is None else counts
-    seeds = SEEDS if seeds is None else seeds
+    if seeds is None:
+        seeds = SPLIT_SEEDS if split_labels else SEEDS
+    labels = "split" if split_labels else None
     items: list[BeliefItem] = []
     for kind, n in counts.items():
         rng = np.random.default_rng(seeds[kind])
-        items += [make_item(world, rng, kind, i) for i in range(n)]
+        items += [make_item(world, rng, kind, i, labels) for i in range(n)]
     return items
+
+
+def generate_tied(world: SimWorld, n: int = TIED_COUNT, seed: int = TIED_SEED) -> list[BeliefItem]:
+    """False-belief items built as in T5-21, keeping only those whose post-move side labels
+    tie (T5-25, reported only). Ids are "tied-NNNN"."""
+    rng = np.random.default_rng(seed)
+    return [
+        replace(make_item(world, rng, "false-belief", i, "tied"), id=f"tied-{i:04d}")
+        for i in range(n)
+    ]
 
 
 # ---- scoring ------------------------------------------------------------------------------
