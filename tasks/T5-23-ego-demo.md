@@ -5,7 +5,7 @@ status: todo
 agent: claude
 budget: 100000
 depends: [T5-04, T5-20]
-owns: [curio_robot/ego_plan.py, curio_robot/sim/ego_world.py, curio_robot/sim/ego_tasks.py, curio_robot/sim/ego_exec.py, curio_robot/sim/place.py, scripts/ego_eval.py, scripts/poc/make_ego_demo.py, tests/test_t5_ego.py, tasks/T5-23-ego-demo.md, tasks/notes/T5-23.md]
+owns: [curio_robot/ego_plan.py, curio_robot/sim/ego_world.py, curio_robot/sim/ego_tasks.py, curio_robot/sim/ego_exec.py, curio_robot/sim/place.py, scripts/ego_eval.py, tests/test_t5_ego.py, tasks/T5-23-ego-demo.md, tasks/notes/T5-23.md]
 reads: [curio_robot/sim/physics.py, curio_robot/sim/expert.py, curio_robot/sim/demos.py, curio_robot/sim/world.py, curio_robot/sim/scenarios.py, curio_robot/fusion.py, curio_robot/perception.py, curio_robot/geometry.py, scripts/poc/phys_core.py, scripts/poc/encode_cv2.py]
 accept: uv run pytest -q tests/test_t5_ego.py
 ---
