@@ -5,8 +5,8 @@ status: todo
 agent: claude
 budget: 100000
 depends: [T5-20]
-owns: [curio_robot/clarify.py, scripts/ask_back_eval.py, scripts/poc/make_ask.py, tests/test_t5_22_clarify.py, tests/test_t5_22_eval.py, tasks/T5-22-ask-back.md, tasks/notes/T5-22.md]
-reads: [curio_robot/bench/items.py, curio_robot/bench/score.py, curio_robot/bench/conditions.py, curio_robot/grounding/client.py, curio_robot/perspective.py, scripts/e2e_eval.py, scripts/poc/make_reel.py, scripts/poc/reel_scenes_a.py, scripts/poc/reel_kit.py, docs/bringup-7900xt.md]
+owns: [curio_robot/clarify.py, scripts/ask_back_eval.py, tests/test_t5_22_clarify.py, tests/test_t5_22_eval.py, tasks/T5-22-ask-back.md, tasks/notes/T5-22.md]
+reads: [curio_robot/bench/items.py, curio_robot/bench/score.py, curio_robot/bench/conditions.py, curio_robot/grounding/client.py, curio_robot/perspective.py, scripts/e2e_eval.py, docs/bringup-7900xt.md]
 accept: uv run pytest -q tests/test_t5_22_clarify.py tests/test_t5_22_eval.py
 ---
 
@@ -25,8 +25,7 @@ phrased in the speaker's frame, instead of guessing.
 - Policy: act if max p >= tau_act; otherwise ask (k <= 2 questions, stop early once max p >=
   tau_act or no question is worth >= 0.1 bit), then act on the argmax.
 - Simulated answerers: truthful (from ground truth) and noisy (each answer flipped w.p. 0.1).
-- Demo: out/t5_22/ask_demo.mp4 (1080p, ~10 s) + ask_demo_720p.mp4 (< 30 MB): the reel's
-  visibility tote scene (live p = 0.53); the robot asks, the person answers, the robot goes.
+- (Demo clip dropped from scope by the coordinator.)
 
 ## GATE (written before any evaluation; not to be changed afterwards)
 Data: out/bench5c (350 items, 50 per kind), geometry condition, v2 adapter. Every item is
