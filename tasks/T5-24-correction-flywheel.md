@@ -5,7 +5,7 @@ status: todo
 agent: claude
 budget: 100000
 depends: [T5-13, T5-18]
-owns: [curio_robot/flywheel/__init__.py, curio_robot/flywheel/log.py, curio_robot/flywheel/request.py, curio_robot/flywheel/scenes.py, curio_robot/flywheel/deploy.py, curio_robot/flywheel/gate.py, curio_robot/flywheel/registry.json, scripts/flywheel_deploy.py, scripts/flywheel_data.py, scripts/flywheel_gate.py, tests/test_t5_flywheel.py, tasks/T5-24-correction-flywheel.md, tasks/notes/T5-24.md]
+owns: [curio_robot/flywheel/__init__.py, curio_robot/flywheel/log.py, curio_robot/flywheel/request.py, curio_robot/flywheel/scenes.py, curio_robot/flywheel/deploy.py, curio_robot/flywheel/gate.py, curio_robot/flywheel/serve.py, curio_robot/flywheel/registry.json, scripts/flywheel_deploy.py, scripts/flywheel_data.py, scripts/flywheel_gate.py, tests/test_t5_flywheel.py, tasks/T5-24-correction-flywheel.md, tasks/notes/T5-24.md]
 reads: [scripts/train_lora.py, scripts/bench_lora_data.py, curio_robot/bench/items.py, curio_robot/bench/conditions.py, curio_robot/bench/score.py, curio_robot/bench/cli.py, curio_robot/sim/ground_eval.py, curio_robot/grounding/client.py, curio_robot/grounding/marks.py, curio_robot/grounding/prompt.py, scripts/poc/scene_base.py, scripts/poc/scenes_a.py, scripts/poc/kit.py, docs/bringup-7900xt.md, tasks/notes/T5-18.md]
 accept: uv run pytest -q tests/test_t5_flywheel.py
 ---
