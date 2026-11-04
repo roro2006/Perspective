@@ -3,8 +3,9 @@ id: T5-20
 title: Physically simulated robots carry out what the live grounder decides (both videos)
 status: todo
 agent: claude
+budget: 100000
 depends: [T5-19]
-owns: [scripts/poc/export_policies.py, scripts/poc/phys_policy.py, scripts/poc/phys_core.py, scripts/poc/phys_g1.py, scripts/poc/phys_go2.py, scripts/poc/phys_scenes.py, scripts/poc/phys_reel.py, scripts/poc/phys_eval.py, scripts/poc/make_physical.py, tests/test_t5_physical.py, third_party/README.md, .gitignore, tasks/T5-20-physical-robots.md, tasks/notes/T5-20.md]
+owns: [scripts/poc/export_policies.py, scripts/poc/phys_policy.py, scripts/poc/phys_core.py, scripts/poc/phys_run.py, scripts/poc/phys_robots.py, scripts/poc/phys_g1.py, scripts/poc/phys_go2.py, scripts/poc/phys_scenes.py, scripts/poc/phys_reel.py, scripts/poc/phys_eval.py, scripts/poc/make_physical.py, tests/test_t5_physical.py, third_party/README.md, .gitignore, tasks/T5-20-physical-robots.md, tasks/notes/T5-20.md]
 reads: [scripts/poc/kit.py, scripts/poc/robots.py, scripts/poc/scene_base.py, scripts/poc/scenes_a.py, scripts/poc/scenes_b.py, scripts/poc/make_video.py, scripts/poc/reel_kit.py, scripts/poc/reel_scenes_a.py, scripts/poc/reel_scenes_b.py, scripts/poc/make_reel.py, tasks/notes/T5-18.md, tasks/notes/T5-19.md, docs/bringup-7900xt.md]
 accept: uv run pytest -q tests/test_t5_physical.py
 ---
