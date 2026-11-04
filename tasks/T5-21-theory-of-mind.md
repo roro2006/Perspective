@@ -1,7 +1,7 @@
 ---
 id: T5-21
 title: Theory of mind - track what each person believes and ground memory requests on it
-status: todo
+status: done
 agent: claude
 budget: 100000
 depends: [T5-20]
