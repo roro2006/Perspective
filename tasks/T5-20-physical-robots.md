@@ -1,7 +1,7 @@
 ---
 id: T5-20
 title: Physically simulated robots carry out what the live grounder decides (both videos)
-status: todo
+status: done
 agent: claude
 budget: 100000
 depends: [T5-19]
