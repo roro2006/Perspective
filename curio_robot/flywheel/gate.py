@@ -1,5 +1,5 @@
-"""The promotion gate of tasks/T5-24 as pure functions over per-item results, so the rule
-is tested without a served model. A result is {suite: [{"id", "kind", "hit", ...}]}; the
+"""The promotion gates of tasks/T5-24 and tasks/T5-26 as pure functions over per-item
+results, so the rules are tested without a served model. A result is {suite: [{"id", "kind", "hit", ...}]}; the
 same ids must appear for both adapters (the paired intervals rely on it)."""
 
 from __future__ import annotations
@@ -107,4 +107,86 @@ def format_table(rows: list[dict]) -> str:
         lines.append(f"| {r['name']} | {r['n']} | {r['v2']:.3f} | {ci(r['v2_ci'])} | "
                      f"{r['v3']:.3f} | {ci(r['v3_ci'])} | {r['diff']:+.3f} | "
                      f"[{r['diff_ci'][0]:+.3f}, {r['diff_ci'][1]:+.3f}] |")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- T5-26 (flywheel turn 2)
+# T5-26's line 1 replaces T5-24's +0.25: the candidate must remove at least half of the
+# current adapter's errors on a fresh front/behind set, and reach FB2_MIN. Lines 2 and 3 are
+# T5-24's, with the fresh deictic set as one more kind. T5-24's decide() stays as it was.
+
+FB2_MIN = 0.90  # fresh front/behind accuracy floor
+FB2_ERROR_SHARE = 0.5  # share of the current adapter's errors the candidate must remove
+DEICTIC_TRAIN_SEED = 31  # grounding_data seed of the deictic replay rows
+DEICTIC_TEST_SEED = 41  # grounding_data seed of the fresh deictic test (d2)
+FB2_SEEDS = range(625000, 626000)  # the fresh front/behind test (b2)
+ADAPTERS = ("v2", "v3", "v4")
+
+
+def removes_half_the_errors(old: float, new: float) -> bool:
+    """T5-26 line 1: new >= FB2_MIN and new >= old + FB2_ERROR_SHARE * (1 - old)."""
+    return new >= FB2_MIN - EPS and new >= old + FB2_ERROR_SHARE * (1 - old) - EPS
+
+
+def compare3(name: str, v2: list[dict], v3: list[dict], v4: list[dict]) -> dict:
+    """One row for three adapters: accuracies with Wilson intervals, and v4 - v2 and
+    v4 - v3 with paired bootstrap intervals."""
+    a, c = paired(v2, v4)
+    b, c3 = paired(v3, v4)
+    n = len(a)
+    hits = {"v2": a, "v3": b, "v4": c}
+    acc = {k: (sum(h) / n if n else 0.0) for k, h in hits.items()}
+    return {"name": name, "n": n, "acc": acc,
+            "ci": {k: wilson(sum(h), n) for k, h in hits.items()},
+            "d_v2": acc["v4"] - acc["v2"], "d_v2_ci": paired_bootstrap(a, c),
+            "d_v3": acc["v4"] - acc["v3"], "d_v3_ci": paired_bootstrap(b, c3)}
+
+
+def decide_v4(v2: Results, v3: Results, v4: Results) -> dict:
+    """{"promote", "reasons", "rows"} by T5-26's three criteria. v4 is judged against v2;
+    v3 is reported alongside and decides nothing."""
+    def row(name: str, suite: str) -> dict:
+        return compare3(name, v2[suite], v3[suite], v4[suite])
+
+    fb = row("front-behind fresh (b2)", "front-behind-2")
+    overall = row("bench5c overall", "bench5c")
+    k2, k3, k4 = by_kind(v2["bench5c"]), by_kind(v3["bench5c"]), by_kind(v4["bench5c"])
+    kinds = [compare3(k, k2[k], k3.get(k, []), k4.get(k, [])) for k in k2]
+    kinds.append(row("deictic d1 (target-2 held-out)", "deictic"))
+    kinds.append(row("deictic d2 (fresh, seed 41)", "deictic-2"))
+
+    old, new = fb["acc"]["v2"], fb["acc"]["v4"]
+    need = max(FB2_MIN, old + FB2_ERROR_SHARE * (1 - old))
+    c1 = removes_half_the_errors(old, new)
+    reasons = [(f"{'PASS' if c1 else 'FAIL'} 1: fresh front/behind {new:.3f} (needs >= "
+               f"{FB2_MIN:.2f} and >= v2 {old:.3f} + {FB2_ERROR_SHARE} * (1 - v2), "
+               f"so >= {need:.3f})")]
+    c2 = overall["acc"]["v4"] >= overall["acc"]["v2"] - OVERALL_DROP - EPS
+    reasons.append(f"{'PASS' if c2 else 'FAIL'} 2: bench5c overall {overall['acc']['v4']:.3f} "
+                   f"(needs >= v2 {overall['acc']['v2']:.3f} - {OVERALL_DROP:.2f})")
+    drops = [k for k in kinds if k["acc"]["v4"] < k["acc"]["v2"] - KIND_DROP - EPS]
+    c3 = not drops
+    worst = min(kinds, key=lambda k: k["d_v2"])
+    detail = ", ".join(f"{k['name']} {k['acc']['v2']:.2f}->{k['acc']['v4']:.2f}"
+                       for k in drops) or f"largest drop {worst['name']} {worst['d_v2']:+.3f}"
+    reasons.append(f"{'PASS' if c3 else 'FAIL'} 3: per-kind drops <= {KIND_DROP:.2f} ({detail})")
+    return {"promote": bool(c1 and c2 and c3), "reasons": reasons,
+            "rows": [fb, overall, *kinds]}
+
+
+def format_table3(rows: list[dict]) -> str:
+    """Markdown table of compare3() rows."""
+    def ci(c):
+        return f"[{c[0]:.2f}, {c[1]:.2f}]"
+
+    def diff(r, k):
+        lo, hi = r[k + "_ci"]
+        return f"{r[k]:+.3f} [{lo:+.3f}, {hi:+.3f}]"
+
+    lines = [("| set | n | v2 (95% CI) | v3 (95% CI) | v4 (95% CI) | v4 - v2 (paired 95% CI) "
+             "| v4 - v3 (paired 95% CI) |"), "|---|---|---|---|---|---|---|"]
+    for r in rows:
+        accs = " | ".join(f"{r['acc'][k]:.3f} {ci(r['ci'][k])}" for k in ADAPTERS)
+        lines.append(f"| {r['name']} | {r['n']} | {accs} | {diff(r, 'd_v2')} | "
+                     f"{diff(r, 'd_v3')} |")
     return "\n".join(lines)
