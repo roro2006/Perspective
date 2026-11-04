@@ -1,7 +1,7 @@
 ---
 id: T5-24
 title: Corrections as a data flywheel; the grounder retrains and is promoted only through a gate
-status: todo
+status: done
 agent: claude
 budget: 100000
 depends: [T5-13, T5-18]
