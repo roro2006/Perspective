@@ -1,0 +1,17 @@
+{
+ "production": "r16-v2",
+ "adapters": [
+  {
+   "name": "r16-v1",
+   "gguf": "curio-ground-r16-f16.gguf",
+   "card": "T2-09",
+   "note": "target-2 adapter"
+  },
+  {
+   "name": "r16-v2",
+   "gguf": "curio-ground-r16-v2-f16.gguf",
+   "card": "T5-06",
+   "note": "benchmark free wording and hidden pairs; gate PASS on bench5b"
+  }
+ ]
+}
