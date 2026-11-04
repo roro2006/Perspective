@@ -36,9 +36,14 @@ from curio_robot.types import ROBOT_CAM, CameraPose
 MERGE = 0.03  # m
 ROBOT_FULL = 200  # points: the robot camera sees the whole block
 HEAD_FRAMES = 8
+MIN_IMAGE_STD = 5.0  # grey levels: a rendered table scene has ~50
 MATCH = 0.03  # m from a perceived block to the simulated one it is
 PICK_TRIES = 2
 SETTLE = 0.5  # s
+
+
+class RenderError(RuntimeError):
+    """The offscreen renderer returned a broken frame; rerun the episode in a fresh world."""
 
 
 @dataclass(slots=True)
@@ -62,11 +67,19 @@ def demonstrate(world: EgoWorld, ep: Episode, on_frame=None) -> Demo:
     rng = np.random.default_rng([7, ep.seed, len(ep.family)])
     ex = Extractor()
     poses: list[CameraPose] = []
+    last: list[np.ndarray] = []
 
     def frame(w: EgoWorld) -> None:
         f = w.ego_frame(rng)
+        # The head sways, so every frame differs; a repeated or flat image is a broken GL
+        # context (it happens when another process loads the GPU), not a view of the table.
+        if f.rgb.std() < MIN_IMAGE_STD or (last and np.array_equal(last[0], f.rgb)):
+            raise RenderError("head camera frame is blank or repeated")
+        last[:] = [f.rgb]
         poses.append(true_poses(w))
         ex.add(f)
+        if len(poses) == ex.init_frames and not ex.tracks:
+            raise RenderError("no block in the first head frames")
         if on_frame is not None:
             on_frame(w, f)
 
@@ -90,7 +103,10 @@ def perceive(world: EgoWorld, frame: PersonFrame, rng: np.random.Generator
     objects. The robot camera is calibrated, so a block it sees whole (ROBOT_FULL points)
     is placed from it; any other is placed by the mean of HEAD_FRAMES head frames, whose
     poses each carry the glasses' tracking error."""
-    robot = _on_table(world.rgbd(ROBOT_CAM))
+    view = world.rgbd(ROBOT_CAM)
+    if view.rgb.std() < MIN_IMAGE_STD:
+        raise RenderError("robot camera frame is blank")
+    robot = _on_table(view)
     head: list[list[Blob]] = []
     for _ in range(HEAD_FRAMES):
         for b in _on_table(world.ego_frame(rng)):

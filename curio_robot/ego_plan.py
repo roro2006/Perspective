@@ -379,7 +379,7 @@ class Extractor:
     """Feed head-camera frames in order with add(); plan() gives the steps."""
 
     def __init__(self, init_frames: int = 3) -> None:
-        self._init_frames = init_frames
+        self.init_frames = init_frames
         self._seed: list[list[Blob]] = []
         self.tracks: list[_Track] = []
         self.names: list[str] = []
@@ -392,9 +392,9 @@ class Extractor:
         blobs, hand = detect(frame)
         self.poses.append(frame.pose)
         self.hand_log.append(hand)
-        if len(self._seed) < self._init_frames:
+        if len(self._seed) < self.init_frames:
             self._seed.append(blobs)
-            if len(self._seed) == self._init_frames:
+            if len(self._seed) == self.init_frames:
                 self._start(frame.t)
             return
         blobs = [b for b in blobs

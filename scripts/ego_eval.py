@@ -16,12 +16,13 @@ from collections import Counter
 from multiprocessing import Pool
 from pathlib import Path
 
-from curio_robot.sim.ego_exec import episode
+from curio_robot.sim.ego_exec import RenderError, episode
 from curio_robot.sim.ego_tasks import FAMILIES, make_episode
 from curio_robot.sim.ego_world import EgoWorld
 
 OUT = Path("C:/Users/Rohan/dev/Perspective/out/t5_23")
 GATE = {"exact": 0.90, "success": 0.80, "c_gap": 0.40}
+RENDER_RETRIES = 5
 _world: EgoWorld | None = None
 
 
@@ -42,10 +43,23 @@ def _init() -> None:
 
 
 def _job(args: tuple[str, int]) -> dict:
+    """One episode. A broken GL frame (RenderError) reruns the same, deterministic episode in
+    a fresh world; the count is kept in the row."""
+    global _world
     family, seed = args
     t = time.time()
-    assert _world is not None
-    out = episode(_world, make_episode(family, seed))
+    for retry in range(RENDER_RETRIES + 1):
+        try:
+            assert _world is not None
+            out = episode(_world, make_episode(family, seed))
+            break
+        except RenderError:
+            if retry == RENDER_RETRIES:
+                raise
+            _world.close()
+            time.sleep(2.0)
+            _world = EgoWorld()
+    out["render_retries"] = retry
     out["wall_s"] = round(time.time() - t, 1)
     return out
 
