@@ -66,6 +66,8 @@ the differences); the gate is on the point estimates. Results go to out/t5_21/ga
 ## Demo
 One ~12 s 1080p clip of a false-belief scene (poc kit, physical wheeled AMR from T5-20),
 out/t5_21/belief_demo.mp4, plus a 720p copy under 30 MB. No on-screen disclaimers.
+Dropped after the gate commit by the user's change of scope: no clip is rendered, and
+scripts/poc/belief_demo.py is not written.
 
 ## Done when
 The accept command passes, plus the full suite, ruff on curio_robot tests scripts, and
