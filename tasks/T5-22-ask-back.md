@@ -1,7 +1,7 @@
 ---
 id: T5-22
 title: Ask back only when it's worth it (one short question in the person's frame)
-status: todo
+status: done
 agent: claude
 budget: 100000
 depends: [T5-20]
