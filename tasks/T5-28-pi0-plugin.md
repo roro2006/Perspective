@@ -1,7 +1,7 @@
 ---
 id: T5-28
 title: Curio drives pi0, a foundation policy we didn't build
-status: todo
+status: done
 agent: claude
 budget: 120000
 depends: [T5-27]
