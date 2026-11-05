@@ -1,7 +1,7 @@
 ---
 id: T5-27
 title: Curio as a plug-in layer, one goal interface for any robot policy
-status: todo
+status: done
 agent: claude
 budget: 100000
 depends: [T5-26]
