@@ -1,7 +1,7 @@
 ---
 id: T5-30
 title: Find why the trained pi0 does nothing at test time, then rerun the T5-28 gate on fresh seeds
-status: todo
+status: blocked
 agent: claude
 budget: 120000
 depends: [T5-28]
