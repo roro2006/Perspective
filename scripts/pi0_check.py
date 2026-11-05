@@ -9,6 +9,8 @@ Uses only the training and held-out demo frames (never an eval seed). Three numb
 - the copy race (--race-batches): each training batch goes through the preprocessor twice, the
   second time after a device synchronise, with smolvla_train's pinned loader (T5-28's) and with
   pi0_train's unpinned one; a batch whose two reads differ was corrupted on its way to the GPU.
+  Here the GPU is otherwise idle, and both loaders read cleanly: the race needs a training step
+  in flight (see pi0_data.loader_options), so this only shows the data itself is sound.
 
 Precondition P of the T5-30 gate: held-out loss within 15% of the logged value, and a median
 absolute joint error <= 0.15 rad. Runs in the lerobot venv, offline:
