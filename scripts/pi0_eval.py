@@ -8,6 +8,8 @@ and skipped when already there, so an interrupted step continues where it stoppe
     python scripts/pi0_eval.py rollouts --policy smolvla --checkpoint .../pretrained_model
     python scripts/pi0_eval.py report       # gate.json and gate.md
 
+T5-30 reran the gate unchanged on fresh seeds: --seed 53000 --out .../out/t5_30 --card T5-30.
+
 Trials: smolvla_eval.make_trials(100, 51000) at 256 x 256 (seeds 51000-51099; the target is
 one block of a same-colour pair). The person's words must be in a frame where the robot's own
 reading picks the partner. smolvla_eval's "on my left/right" (demos.words_for) is that on 84
@@ -290,7 +292,7 @@ def gate(rows: list[dict], seeds: list[int]) -> dict:
 
 
 def markdown(res: dict) -> str:
-    lines = [f"# T5-28 gate: Curio drives pi0 -- **{res['verdict']}**", "",
+    lines = [f"# {res.get('card', 'T5-28')} gate: Curio drives pi0 -- **{res['verdict']}**", "",
              (f"{res['n']} scenes, seeds {res['seeds'][0]}-{res['seeds'][-1]} "
               f"({res['rules']['side']} with 'on my left/right', {res['rules']['distance']} "
               f"with 'closest to me / farthest from me'); grounder {res['adapter']}; "
@@ -421,6 +423,7 @@ def cmd_report(args, trials: list[GateTrial], dropped: list[int]) -> dict:
     ckpts = {r["policy"]: r["checkpoint"] for r in _read(args.out / "checkpoints.jsonl")}
     ms = sorted(g["resolve_ms"] for g in goals)
     res.update(
+        card=args.card,
         seeds=seeds, dropped_seeds=dropped, adapter=production_adapter(), checkpoints=ckpts,
         rules={k: sum(gt.rule == k for gt in trials) for k in ("side", "distance")},
         grounding={"n": len(goals), "correct": sum(g["goal_id"] == g["target_id"] for g in goals),
@@ -442,6 +445,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=OUT)
     parser.add_argument("--n", type=int, default=GATE_N)
     parser.add_argument("--seed", type=int, default=GATE_SEED)
+    parser.add_argument("--card", default="T5-28", help="the card whose gate this is (report title)")
     args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):  # see pi0_train.utf8_stdout
         stream.reconfigure(encoding="utf-8", errors="replace")

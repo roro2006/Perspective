@@ -41,10 +41,11 @@ import time
 from pathlib import Path
 
 import torch
-from pi0_data import ACTION, CAMERA_KEYS, STATE, Pi0Frames, load_tasks, split
+from pi0_data import ACTION, CAMERA_KEYS, STATE, Pi0Frames, load_tasks, loader_options, split
 
 # smolvla_train puts the repo root on sys.path (via smolvla_dataset) before curio_robot.
-from smolvla_train import _Cycle, _loader, _log, autocast, hard_exit, release_gpu
+# Not its _loader: that one pins host memory, which corrupted pi0's targets (T5-30).
+from smolvla_train import _Cycle, _log, autocast, hard_exit, release_gpu
 
 from curio_robot.sim import demos
 
@@ -160,6 +161,12 @@ def expert_loss(policy, batch: dict) -> torch.Tensor:
     n_dims = policy.config.output_features[ACTION].shape[0]
     err = torch.nn.functional.mse_loss(noise - actions, v_t, reduction="none")
     return err[..., :n_dims].mean()
+
+
+def _loader(dataset, batch_size: int, workers: int, shuffle: bool, seed: int):
+    """smolvla_train's loader without pinned memory (pi0_data.loader_options says why)."""
+    return torch.utils.data.DataLoader(dataset, generator=torch.Generator().manual_seed(seed),
+                                       **loader_options(batch_size, workers, shuffle))
 
 
 def trainable(policy) -> list[torch.nn.Parameter]:
