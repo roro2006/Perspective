@@ -5,7 +5,10 @@ Uses only the training and held-out demo frames (never an eval seed). Three numb
   pi0_train.evaluate logged (0.968 at step 22,000);
 - the training-path loss (pi0_train.expert_loss) on evenly spaced training frames;
 - open loop: pi0_eval's Pi0Runner predicts the first action of each held-out frame's chunk
-  (the action select_action executes) and it is compared with the demo's action, in radians.
+  (the action select_action executes) and it is compared with the demo's action, in radians;
+- the copy race (--race-batches): each training batch goes through the preprocessor twice, the
+  second time after a device synchronise, with smolvla_train's pinned loader (T5-28's) and with
+  pi0_train's unpinned one; a batch whose two reads differ was corrupted on its way to the GPU.
 
 Precondition P of the T5-30 gate: held-out loss within 15% of the logged value, and a median
 absolute joint error <= 0.15 rad. Runs in the lerobot venv, offline:
@@ -36,6 +39,7 @@ LOSS_TOLERANCE = 0.15  # P: held-out loss within 15% of the logged value
 JOINT_TOLERANCE = 0.15  # P: median absolute joint error, rad
 TRAIN_SAMPLES = 256
 OPEN_LOOP_SAMPLES = 256
+RACE_BATCHES = 100
 
 
 def logged_eval_loss(train_log: Path, step: int) -> float:
@@ -58,6 +62,25 @@ def precondition(loss: float, logged: float, joint_errors: np.ndarray) -> dict:
             "pass": bool(rel <= LOSS_TOLERANCE and median <= JOINT_TOLERANCE)}
 
 
+def corrupted_batches(loader, preprocessor, n: int) -> dict:
+    """How many of n batches the preprocessor delivers differently on a first read and on a
+    re-read after torch.cuda.synchronize(), and the largest difference per key."""
+    import torch
+
+    bad, worst = 0, {}
+    for i, batch in enumerate(loader):
+        if i == n:
+            break
+        first = {k: v.detach().clone() for k, v in preprocessor(batch).items() if torch.is_tensor(v)}
+        torch.cuda.synchronize()
+        again = preprocessor(batch)
+        diff = {k: (first[k].float() - again[k].float()).abs().max().item() for k in first}
+        bad += any(d > 0 for d in diff.values())
+        for k, d in diff.items():
+            worst[k] = max(worst.get(k, 0.0), round(d, 4))
+    return {"batches": min(n, i + 1), "corrupted": bad, "max_abs_diff": worst}
+
+
 def evenly(n: int, k: int) -> list[int]:
     return list(range(0, n, max(1, n // k)))
 
@@ -69,16 +92,17 @@ def main() -> None:
     parser.add_argument("--demos", type=Path, default=DEMOS)
     parser.add_argument("--relabel", type=Path, default=RELABEL)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--race-batches", type=int, default=RACE_BATCHES, help="0: skip")
     args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
+    import smolvla_train
     import torch
     from pi0_data import ACTION, Pi0Frames, load_tasks, split
     from pi0_eval import Pi0Runner
-    from pi0_train import EVAL_SAMPLES, evaluate
-    from smolvla_train import _loader
+    from pi0_train import EVAL_SAMPLES, _loader, evaluate
 
     from curio_robot.sim import demos
 
@@ -101,6 +125,13 @@ def main() -> None:
     runner.policy.eval()
     print(f"held-out loss {heldout:.4f} (logged {logged}), train loss {train_loss:.4f}")
 
+    race = {}
+    if args.race_batches:
+        for name, make in (("pinned (T5-28)", smolvla_train._loader), ("unpinned (T5-30)", _loader)):
+            race[name] = corrupted_batches(make(train_set, 16, 4, True, 0), runner.pre,
+                                           args.race_batches)
+            print(name, race[name])
+
     errors, rows = [], []
     for k in evenly(len(eval_set), OPEN_LOOP_SAMPLES):
         sample = eval_set[k]
@@ -120,10 +151,12 @@ def main() -> None:
     res.update(checkpoint=str(args.checkpoint), train_loss=round(train_loss, 5),
                open_loop_frames=len(errors),
                median_abs_error_per_joint=np.round(np.median(np.abs(errors), 0), 4).tolist(),
-               examples=rows, seconds=round(time.perf_counter() - t0, 1))
+               examples=rows, copy_race=race, seconds=round(time.perf_counter() - t0, 1))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(res, indent=1), encoding="utf-8")
     print(json.dumps(res, indent=1))
+    smolvla_train.release_gpu()
+    smolvla_train.hard_exit(0)
 
 
 def _png(path: Path):

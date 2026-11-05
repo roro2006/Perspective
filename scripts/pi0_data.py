@@ -168,6 +168,19 @@ class Pi0Frames:
         return out
 
 
+def loader_options(batch_size: int, workers: int, shuffle: bool) -> dict:
+    """torch DataLoader keyword arguments for pi0 batches (the generator is the caller's).
+
+    pin_memory stays off (T5-30). With pinned batches the preprocessor's non-blocking copy to
+    the RX 7900 XT sometimes read the action chunk before it was all there: in T5-28's loop
+    about one batch in ten trained on a target that a synchronised re-read of the same batch
+    did not give back (up to 9 normalized units off). The model learned those corrupted
+    targets, so its loss in training fell to 0.001 while the same weights scored about 1 on
+    any clean batch, and it failed at inference. Unpinned host memory is copied synchronously."""
+    return {"batch_size": batch_size, "shuffle": shuffle, "num_workers": workers,
+            "persistent_workers": workers > 0, "pin_memory": False, "drop_last": shuffle}
+
+
 def load_tasks(relabel_path: Path) -> dict[int, str]:
     """episode index -> robot words, from relabel.jsonl."""
     with Path(relabel_path).open(encoding="utf-8") as f:
