@@ -314,7 +314,7 @@ def report() -> dict:
                 for r in rows])
     ms = np.array([r["resolve_ms"] for r in rows])
     p95 = float(np.percentile(ms, 95))
-    under = rate([m <= GATE["p95_ms"] for m in ms])
+    under = rate([bool(m <= GATE["p95_ms"]) for m in ms])
     gate = {
         "1_equivalence": {"pass": line1, "bench5c_items": eq_bench, "t5_20_scenes": eq_scene,
                           "t5_20_queries": rate([all(r[c] for c in checks) for r in scenes]),
@@ -328,7 +328,7 @@ def report() -> dict:
         "3_reader_robot_words": {"pass": reader["rate"] >= GATE["reader"], **reader,
                                  "by_kind": by_kind(rows, lambda r: r["robot_words_pick"]
                                                     == r["target"])},
-        "4_latency": {"pass": p95 <= GATE["p95_ms"], "p95_ms": round(p95, 1),
+        "4_latency": {"pass": bool(p95 <= GATE["p95_ms"]), "p95_ms": round(p95, 1),
                       "p50_ms": round(float(np.percentile(ms, 50)), 1),
                       "max_ms": round(float(ms.max()), 1), "share_le_250ms": under},
     }
