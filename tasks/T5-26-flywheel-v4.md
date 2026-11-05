@@ -1,7 +1,7 @@
 ---
 id: T5-26
 title: Flywheel turn 2, v4 with deictic replay so front/behind doesn't cost gaze
-status: todo
+status: done
 agent: claude
 budget: 100000
 depends: [T5-24]
