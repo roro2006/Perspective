@@ -1,5 +1,5 @@
 {
- "production": "r16-v2",
+ "production": "r16-v4",
  "adapters": [
   {
    "name": "r16-v1",
@@ -12,6 +12,12 @@
    "gguf": "curio-ground-r16-v2-f16.gguf",
    "card": "T5-06",
    "note": "benchmark free wording and hidden pairs; gate PASS on bench5b"
+  },
+  {
+   "name": "r16-v4",
+   "gguf": "curio-ground-r16-v4-f16.gguf",
+   "card": "T5-26",
+   "note": "flywheel turn 2: v2 data + front/behind corrections + deictic replay; gate PROMOTE"
   }
  ]
 }
