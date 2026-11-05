@@ -33,13 +33,13 @@ from curio_robot.bench import items as bench_items
 from curio_robot.bench.conditions import build
 from curio_robot.grounding.client import GroundingAnswer
 from curio_robot.layer import adapters, resolve
-from curio_robot.layer import robot_words as rw
 from curio_robot.layer.goal import base_from_camera
 from curio_robot.layer.resolve import (
     GroundingUnavailable,
     geometry_request,
     production_adapter,
 )
+from curio_robot.layer.robot_words import RELATIONS, check, instruction
 from curio_robot.sim.demos import draw_marker
 from curio_robot.types import ROBOT_CAM, ObjectMap, WorldObject
 
@@ -224,9 +224,9 @@ def same_legs(scene, t520_answers: dict, goals: dict, robot_pose) -> bool:
 def words_rows(items) -> list[dict]:
     rows = []
     for item in items:
-        words = rw.instruction(item.target_id, item.object_map)
+        words = instruction(item.target_id, item.object_map)
         rows.append({"id": item.id, "kind": item.kind, "text": item.text, "words": words,
-                     "hit": rw.check(words, item.object_map) == item.target_id})
+                     "hit": check(words, item.object_map) == item.target_id})
     return rows
 
 
@@ -257,7 +257,7 @@ def live(items, url: str) -> dict:
         except GroundingUnavailable as e:
             goal, error = None, str(e)
         ms = (time.perf_counter() - ts) * 1000
-        words = rw.instruction(item.target_id, item.object_map)
+        words = instruction(item.target_id, item.object_map)
         picks = {}
         for name, req in (("robot_words", reader_request(item, words)),
                           ("human_words", reader_request(item, item.text)),
@@ -352,7 +352,7 @@ def report() -> dict:
 
 def relation_counts(rows: list[dict]) -> dict[str, int]:
     def phrase(words: str) -> str:
-        return next((p for p in rw.RELATIONS if words.endswith(" " + p)), "(unique colour)")
+        return next((p for p in RELATIONS if words.endswith(" " + p)), "(unique colour)")
     names = [phrase(r["words"]) for r in rows]
     return {p: names.count(p) for p in dict.fromkeys(names)}
 
