@@ -60,3 +60,28 @@ and nothing is tuned after a score. A FAIL is acceptable.
   stored samples, and the goal hand-off).
 - The full suite, ruff, and tasks.py check pass.
 - Notes are in tasks/notes/T5-32.md, crediting kouylty, Isaac Lab and Unitree.
+
+## Port choices (written before the gate run; the gate above is unchanged)
+- Source: huggingface.co/kouylty/Isaac-Go2-Navigation-Rough-v0 @6c61ab2 (MIT). The README is
+  empty; the layouts were read from the TorchScript exports and their normalisers.
+- Walking policy: 235 -> 512 -> 256 -> 128 -> 12 ELU, Identity normaliser; the same layout as
+  Isaac Lab's Go2 rough velocity task, so T5-20's port is reused as is (breadth-first joint
+  order, default pose, DCMotor PD 25 / 0.5 with saturation, action scale 0.25, 50 Hz on a
+  0.002 s step, flat height scan = base z - 0.5, Coulomb-only foot friction).
+- Navigation policy: 203 -> 256 -> 128 -> 64 -> 3 ELU, normaliser (x - mean) / (std + 0.01).
+  Obs: lin vel (3), ang vel (3), projected gravity (3), pose command (4: goal x, y, z in the
+  yaw-aligned base frame, heading error), height scan (187), last nav action (3, raw). The
+  pose-command slot is the one with the largest first-layer weights and its outputs follow the
+  goal's sign; the tail slot behaves as a last action (the critic ignores it).
+- Flat-ground equivalents: height scan as T5-20; pose-command z = 0.4 - base z (Isaac Lab's
+  goal z is terrain origin + 0.4 m). Training mean of that slot was 0.37 (rough terrain).
+- Rates: navigation at 5 Hz (every 10th walking step, Isaac Lab's navigation decimation).
+- Command: the nav action is clipped to the walking policy's training range [-1, 1] before
+  the walking policy sees it (Isaac Lab passes it raw; unclipped, the raw outputs of 2-9 drive
+  the MuJoCo walker out of its range and it stalls or falls). The last-action obs stays raw.
+- Goal heading: the bearing of travel to each point (simple heading). Intermediate waypoints
+  are passed within 0.5 m.
+- Seen in porting checks (seeds 900+, not the gate's): the policy reaches each goal (closest
+  0.0-0.3 m) but keeps moving around it with large actions and often falls, as its training
+  statistics suggest (mean speed 0.45 m/s, goal mostly within 0.3 m ahead). Nothing was tuned
+  to change that.
