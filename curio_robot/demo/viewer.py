@@ -398,13 +398,14 @@ def _start_voice(demo, lines: queue.Queue[str | None], robot: str = "arm"):
 def main() -> None:
     p = argparse.ArgumentParser(prog="curio_robot.demo.viewer", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--scene", default="perspective:0", help="first scene, kind:seed")
+    p.add_argument("--scene", default="perspective:0",
+                   help="first scene, kind:seed (dog: corridor, doorway, closest or rescue)")
     p.add_argument("--no-voice", action="store_true", help="terminal only, no microphone")
     p.add_argument("--robot", choices=("arm", "dog"), default="arm",
                    help="arm: the SO-101 table demo (T5-33); dog: the rescue Go2 (T5-34)")
     args = p.parse_args()
     if args.robot == "dog":
-        _main_dog(args.no_voice)
+        _main_dog(args.no_voice, args.scene if args.scene != "perspective:0" else "rescue:0")
         return
     kind, _, seed = args.scene.partition(":")
     if kind not in SCENARIOS:
@@ -435,30 +436,49 @@ def main() -> None:
         world.close()
 
 
-def _main_dog(no_voice: bool) -> None:
+def _main_dog(no_voice: bool, scene: str = "rescue:0") -> None:
+    """The dog demo. A new building is a new MuJoCo model, which the passive viewer can't
+    swap, so `scene` and `n` close the window and open one on the new layout (about 2 s);
+    the terminal, the voice and the Curio switch carry over."""
     from curio_robot.demo import dog
+    from curio_robot.demo.dog_scenes import KINDS
 
     if not dog.have_assets():
         sys.exit("The Go2 model and walking policy aren't here: see third_party/README.md "
                  "(fetch them, then uv run python scripts/poc/export_policies.py --go2).")
-    world = dog.DogWorld()
-    world.model.vis.quality.shadowsize = VIEWER_SHADOW
+    kind, _, seed = scene.partition(":")
+    if kind not in KINDS:
+        sys.exit(f"dog scene kind must be one of {', '.join(KINDS)}")
     lines: queue.Queue[str | None] = queue.Queue()
     listener = None
     threading.Thread(target=_read_stdin, args=(lines,), daemon=True).start()
+    carry: dict = {}
+    nxt: tuple[str, int] | None = (kind, int(seed or 0))
     try:
-        with mujoco.viewer.launch_passive(world.model, world.data, show_left_ui=False,
-                                          show_right_ui=False) as v:
-            dog.setup_camera(v)
-            demo = dog.DogDemo(v, world)
-            demo.load()
-            print(dog.HELP, flush=True)
-            listener = _start_voice(demo, lines, "dog") if not no_voice else None
-            _loop(v, demo, lines)
+        while nxt is not None:
+            world = dog.DogWorld(*nxt)
+            world.model.vis.quality.shadowsize = VIEWER_SHADOW
+            nxt = None
+            try:
+                with mujoco.viewer.launch_passive(world.model, world.data, show_left_ui=False,
+                                                  show_right_ui=False) as v:
+                    dog.setup_camera(v, world)
+                    demo = dog.DogDemo(v, world)
+                    for k, val in carry.items():
+                        setattr(demo, k, val)
+                    demo.load()
+                    if not carry:
+                        print(dog.HELP, flush=True)
+                        listener = _start_voice(demo, lines, "dog") if not no_voice else None
+                    _loop(v, demo, lines)
+                    nxt = demo.switch_to
+                    carry = {"curio": demo.curio, "say": demo.say,
+                             "voice_line": demo.voice_line, "showcase_i": demo.showcase_i}
+            finally:
+                world.close()
     finally:
         if listener is not None:
             listener.close()
-        world.close()
 
 
 def _loop(v, demo, lines: queue.Queue[str | None]) -> None:
@@ -475,6 +495,8 @@ def _loop(v, demo, lines: queue.Queue[str | None]) -> None:
                     break
         except queue.Empty:
             pass
+        if getattr(demo, "switch_to", None) is not None:
+            v.close()  # the dog demo reopens on a new building
         if not v.is_running():
             break
         demo.tick(min(now - last, 0.25))

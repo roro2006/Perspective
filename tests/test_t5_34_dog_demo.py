@@ -18,7 +18,10 @@ needs_go2 = pytest.mark.skipif(not dog.have_assets(), reason="Go2 assets not dow
 
 def test_dog_phrases_are_what_the_resolver_reads():
     reqs = voice.requests("dog")
-    assert reqs and all(parse_request(r).relation in ("left", "right") for r in reqs)
+    # T5-35 added colour rooms with closest / furthest; every phrase is still one the rule
+    # resolver reads (a relation, and a colour when it names one)
+    assert reqs and all(parse_request(r).relation in ("left", "right", "nearest", "farthest")
+                        for r in reqs)
     assert all(p.startswith("curio ") for p in voice.phrases("dog"))
     assert voice.to_command("curio turn around", "dog") == "turn"
     assert voice.to_command("curio compare", "dog") == "c"

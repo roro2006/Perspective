@@ -32,12 +32,10 @@ from curio_robot.types import CameraPose, ObjectMap, Target, WorldObject
 
 POC = Path(__file__).resolve().parents[2] / "scripts" / "poc"
 HEAD_CAM, DOG_CAM = "p_head_cam", "go2_cam"
-FIREFIGHTER = (-1.2, 0.0, 0.94)
-FF_ANGLES = {"neck_pitch": 0.05, "l_sh_pitch": -0.5, "l_sh_abd": 1.45, "l_elbow": -0.1}
-SURVIVOR = {1: ((2.4, 2.9, 0.15), np.pi * 0.85), -1: ((2.4, -2.9, 0.15), -np.pi * 0.85)}
+FF_Z = 0.94
 ARRIVE_TOL = 0.5  # the gate's end-to-end success radius
-MAX_STEP_S = 0.1  # most simulated time per viewer frame (a slow frame doesn't jump the dog)
 CREDIT = "walking policy: cagataydev / strands-robots Isaac Lab showcase (CC-BY-4.0)"
+HIDDEN = (-30.0, -30.0, 0.15)  # where the survivor waits when the words have no truth
 
 
 def _poc() -> None:
@@ -64,22 +62,25 @@ def cam_pose(model, data, name: str) -> CameraPose:
 
 
 class DogWorld:
-    """One rescue scene, its Go2 and the kinematic people. Not thread safe: one owner."""
+    """One building layout (dog_scenes), its Go2 and the kinematic people. One owner only."""
 
-    def __init__(self) -> None:
+    def __init__(self, kind: str = "rescue", seed: int = 0) -> None:
         _poc()
         from kit import euler_quat, pose_humanoid
-        from phys_scenes import PhysDog
+        from phys_go2 import FALL_Z, Go2Walker
+
+        from curio_robot.demo import dog_scenes
 
         self._euler, self._pose = euler_quat, pose_humanoid
-        self.scene = PhysDog()
-        self.model = self.scene.spec().compile()
+        self.layout = dog_scenes.make(kind, seed)
+        self.kind, self.seed = kind, seed
+        self.model = self.layout.spec().compile()
         self.data = mujoco.MjData(self.model)
-        self.scene.setup(self.model, self.data)
-        self.dog = self.scene.make_robot(self.model, self.data)
-        self.rooms = {c.oid: np.asarray(c.pos, float) for c in self.scene.candidates}
+        self.dog = Go2Walker(self.model, self.data)
+        self.fall_z = FALL_Z
+        self.rooms = self.layout.room_xyz()
         self._kinematic()
-        self.facing = 0.0  # firefighter's yaw: 0 faces down the corridor (+x)
+        self.facing = float(self.layout.ff[2])
         self.fell = False
         self.min_z = 9.0
         self.sim_t = 0.0
@@ -87,13 +88,21 @@ class DogWorld:
         self._renderers: dict[tuple[int, int], mujoco.Renderer] = {}
         self.home()
 
+    @property
+    def request(self) -> str:
+        return self.layout.request
+
+    @property
+    def ff_xy(self) -> np.ndarray:
+        return np.array(self.layout.ff[:2], float)
+
     def _kinematic(self) -> None:
         """qpos/qvel indices of every joint that isn't the dog's (phys_run.Run._kin)."""
         m = self.model
         size = {mujoco.mjtJoint.mjJNT_FREE: (7, 6), mujoco.mjtJoint.mjJNT_BALL: (4, 3)}
         qa, va = [], []
         for j in range(m.njnt):
-            if m.joint(j).name.startswith(self.scene.rprefix):
+            if m.joint(j).name.startswith("go2_"):
                 continue
             nq, nv = size.get(m.jnt_type[j], (1, 1))
             qa += range(m.jnt_qposadr[j], m.jnt_qposadr[j] + nq)
@@ -103,15 +112,13 @@ class DogWorld:
     # ---- layout ------------------------------------------------------------------------------
 
     def home(self, seed: int | None = None) -> None:
-        """The scene's start: the dog at the corridor's end facing the firefighter (jittered
-        as T5-20's gate runs when a seed is given), the firefighter as they now face."""
+        """The layout's start: the dog at the corridor's east end (jittered as T5-20's gate
+        runs when a seed is given), the firefighter as they now face."""
         from phys_run import JOINT_JITTER, START_XY, START_YAW
 
         m, d = self.model, self.data
         mujoco.mj_resetData(m, d)
-        self.scene.setup(m, d)
-        self._place_people()
-        x, y, _, yaw = self.scene.start()
+        x, y, yaw = self.layout.start
         rng = None
         if seed is not None:
             rng = np.random.default_rng(seed)
@@ -120,31 +127,39 @@ class DogWorld:
             yaw += rng.uniform(-START_YAW, START_YAW)
         self.dog.reset()
         self.dog.place(x, y, yaw, rng=rng, jitter=JOINT_JITTER if rng is not None else 0.0)
+        self._place_people()
         mujoco.mj_forward(m, d)
         self._saved = d.qpos[self.kq].copy()
         self.fell, self.min_z, self.sim_t, self.goal = False, 9.0, 0.0, None
 
     def _place_people(self) -> None:
         m, d = self.model, self.data
-        self._pose(m, d, "p_", FIREFIGHTER, self._euler(yaw=self.facing), FF_ANGLES)
-        # The survivor is in the room the firefighter's left points at (the story's truth).
-        side = 1 if left_of(self.facing)[1] > 0 else -1
-        pos, yaw = SURVIVOR[side]
+        fx, fy, _ = self.layout.ff
+        self._pose(m, d, "p_", (fx, fy, FF_Z), self._euler(yaw=self.facing),
+                   self.layout.ff_angles)
+        # The survivor is in the room the scene's own words mean (the story's truth).
+        rid, _ = oracle_room(self.request, self)
+        pos, yaw = self.layout.survivor(rid) if rid else (HIDDEN, 0.0)
         self._pose(m, d, "s_", pos, self._euler(pitch=-np.pi / 2, yaw=yaw),
                    {"l_sh_abd": 0.5, "r_sh_abd": -0.9, "l_knee": 0.4})
 
     def turn_firefighter(self) -> None:
-        """Face the other way: the same words now mean the other room."""
-        self.facing = 0.0 if abs(self.facing) > 1.0 else np.pi
+        """Face the other way: left and right swap for the same words."""
+        self.facing = float((self.facing + 2 * np.pi) % (2 * np.pi) - np.pi)
         self.home()
+
+    @property
+    def turned(self) -> bool:
+        return bool(np.cos(self.facing - self.layout.ff[2]) < 0)
 
     # ---- live physics ------------------------------------------------------------------------
 
     def go(self, room: str) -> np.ndarray:
-        """Start the walk to `room` along the scene's route (door waypoints); returns its goal."""
-        (leg,) = self.scene.legs({"geo": room})
-        self.dog.go(leg.route, leg.heading)
-        self.goal = np.asarray(leg.goal, float)
+        """Start the walk to `room` along the layout's route (door waypoints); returns its
+        goal."""
+        pts, goal = self.layout.route(room)
+        self.dog.go(pts, None)
+        self.goal = np.asarray(goal, float)
         return self.goal
 
     @property
@@ -161,7 +176,7 @@ class DogWorld:
             self.dog.after_step()
             z = self.dog.height()
             self.min_z = min(self.min_z, z)
-            if z < self.scene.fall_z:
+            if z < self.fall_z:
                 self.fell = True
             self.sim_t += m.opt.timestep
 
@@ -170,8 +185,7 @@ class DogWorld:
         return np.array([x, y])
 
     def room_goal(self, room: str) -> np.ndarray:
-        (leg,) = self.scene.legs({"geo": room})
-        return np.asarray(leg.goal, float)
+        return np.asarray(self.layout.route(room)[1], float)
 
     # ---- cameras -----------------------------------------------------------------------------
 
@@ -207,24 +221,34 @@ class DogDecision:
 def room_map(world: DogWorld, curio: bool) -> ObjectMap:
     """The floor map's rooms, with the dog's camera pose and (Curio on) the firefighter's."""
     m, d = world.model, world.data
-    rooms = [WorldObject(name, "room", pos.copy(), {"map"}) for name, pos in world.rooms.items()]
+    rooms = [WorldObject(rid, world.layout.color_of(rid), pos.copy(), {"map"})
+             for rid, pos in world.rooms.items()]
     return ObjectMap(rooms, cam_pose(m, d, DOG_CAM), cam_pose(m, d, HEAD_CAM) if curio else None)
 
 
 def oracle_room(text: str, world: DogWorld) -> tuple[str | None, str]:
-    """The room the words mean, from the simulator's truth: the speaker's (or for "your", the
-    dog's) true body yaw. Only left / right is covered; anything else is unknown."""
+    """The room the words mean, from the simulator's truth: the rooms of the named colour,
+    ranked from the speaker's (or for "your", the dog's) true position and body yaw. Words with
+    no relation, or naming no room that exists, have no truth here ("unknown")."""
     req = parse_request(text)
-    if req.relation not in ("left", "right"):
-        return None, "unknown (only left / right is scored)"
+    rooms = {rid: p for rid, p in world.rooms.items()
+             if req.color is None or world.layout.color_of(rid) == req.color}
+    if not rooms or req.relation is None:
+        return None, "unknown (no colour match or no relation in the words)"
     if req.speaker_frame:
-        origin, yaw, whose = np.array(FIREFIGHTER[:2]), world.facing, "firefighter's"
+        origin, yaw, whose = world.ff_xy, world.facing, "firefighter's"
     else:
         x, y, yaw = world.dog.pose()
         origin, whose = np.array([x, y]), "dog's"
-    side = {n: float((p[:2] - origin) @ left_of(yaw)) for n, p in world.rooms.items()}
-    pick = max(side, key=side.get) if req.relation == "left" else min(side, key=side.get)
-    return pick, f"{pick} (the {whose} true {req.relation})"
+    if req.relation in ("left", "right"):
+        score = {r: float((p[:2] - origin) @ left_of(yaw)) for r, p in rooms.items()}
+        what = f"true {req.relation}"
+    else:
+        score = {r: -float(np.linalg.norm(p[:2] - origin)) for r, p in rooms.items()}
+        what = req.relation
+    best = max if req.relation in ("left", "nearest") else min
+    pick = best(score, key=score.get)
+    return pick, f"{pick} (the {whose} {what})"
 
 
 def decide(world: DogWorld, text: str, curio: bool) -> DogDecision:
@@ -240,13 +264,14 @@ def decide(world: DogWorld, text: str, curio: bool) -> DogDecision:
     else:
         verdict = "correct" if target.object_id == oid else "wrong"
     req = parse_request(text)
-    parsed = {"relation": req.relation, "frame": "speaker" if req.speaker_frame else "listener"}
+    parsed = {"color": req.color, "relation": req.relation,
+              "frame": "speaker" if req.speaker_frame else "listener"}
     return DogDecision(text, curio, om, target, oid, why, verdict, round(ms, 3), parsed)
 
 
 def arrived_at(world: DogWorld, room: str) -> bool:
-    """The gate's end-to-end test: within ARRIVE_TOL of the room's goal and closer to it than
-    to the other room's."""
+    """The gates' end-to-end test: within ARRIVE_TOL of the room's goal and nearer to it than
+    to any other room's."""
     xy = world.dog_xy()
     dists = {n: float(np.linalg.norm(xy - world.room_goal(n))) for n in world.rooms}
     return dists[room] <= ARRIVE_TOL and dists[room] == min(dists.values())
@@ -254,33 +279,37 @@ def arrived_at(world: DogWorld, room: str) -> bool:
 
 # ---- the viewer --------------------------------------------------------------------------------
 
-REQUEST = "Survivor's in the room on my left."
 INSET_W, INSET_H = 400, 300
 DOG_INSET_PERIOD = 1.0  # s between dog-camera refreshes while it walks (a render is ~0.2 s)
 CATCH_UP_S = 0.4  # most simulated time made up in one frame after a slow one (a render)
 PAUSE_S = 1.5
-OVERVIEW = {"lookat": (3.2, 0.0, 0.0), "distance": 12.5, "azimuth": 112.0, "elevation": -58.0}
+# Showcase scenes, picked from the T5-35 gate by its rule (Curio off wrong, on right, walked).
+SHOWCASE: tuple[tuple[str, int], ...] = (("rescue", 0),)
 ROOM_MARK = 0.28  # m, the floor discs at the chosen and the true room's goal
 
-HELP = """Type a request and press Enter, e.g.  Survivor's in the room on my left
+HELP = """Type a request and press Enter, e.g.  The red room on my left
   (Enter alone)   the scene's own request
   on / off        Curio on (dog + firefighter's head camera) or off (dog's camera only)
   c               compare: the same words with Curio off, then on
-  turn            the firefighter turns round: the same words mean the other room
+  turn            the firefighter turns round: left and right swap
+  n               next showcase scene
+  scene K S       load scene kind K (corridor, doorway, closest, rescue) with seed S
+                  (the window reopens on the new building)
   r               reset        h  this help        q  quit"""
 
 
-def setup_camera(v) -> None:
-    v.cam.lookat[:] = OVERVIEW["lookat"]
-    v.cam.distance = OVERVIEW["distance"]
-    v.cam.azimuth, v.cam.elevation = OVERVIEW["azimuth"], OVERVIEW["elevation"]
+def setup_camera(v, world: DogWorld) -> None:
+    ov = world.layout.overview()
+    v.cam.lookat[:] = ov["lookat"]
+    v.cam.distance = ov["distance"]
+    v.cam.azimuth, v.cam.elevation = ov["azimuth"], ov["elevation"]
 
 
 class DogDemo:
     """The rescue demo in MuJoCo's viewer; same interface as viewer.ViewerDemo."""
 
     HELP = HELP
-    VOICE_EXAMPLE = "Curio, survivor's in the room on my left"
+    VOICE_EXAMPLE = "Curio, the red room on my left"
 
     def __init__(self, viewer, world: DogWorld) -> None:
         from curio_robot.demo.viewer import VERDICT
@@ -306,6 +335,8 @@ class DogDemo:
         self._walk_wall = 0.0
         self.rate: float | None = None  # simulated / wall time over the last walk
         self.paced = True  # False only in the gate's capacity run
+        self.switch_to: tuple[str, int] | None = None  # a new building: the viewer reopens
+        self.showcase_i = -1
 
     # ---- scene and runs -------------------------------------------------------------------
 
@@ -315,18 +346,22 @@ class DogDemo:
         self.decision, self.compare, self.pending = None, {}, []
         self.status, self.result_line = "ready", "-"
         self._full = True
-        print(f"\nRescue scene. The firefighter faces {self.facing_name()}. "
-              f'Its request: "{REQUEST}"', flush=True)
+        w = self.world
+        print(f"\nScene {w.kind} {w.seed}: {len(w.rooms)} rooms. The firefighter "
+              f'{self.facing_name()}. Its request: "{w.request}"', flush=True)
 
     def facing_name(self) -> str:
-        return "down the corridor" if abs(self.world.facing) < 1.0 else "away from the corridor"
+        yaw = self.world.facing
+        way = {0: "faces east", 1: "faces north", 2: "faces west", 3: "faces south"}
+        name = way[round(yaw / (np.pi / 2)) % 4]
+        return name + (" (turned round)" if self.world.turned else "")
 
     @property
     def busy(self) -> bool:
         return self.world.walking or bool(self.pending)
 
     def run(self, text: str, curio: bool) -> None:
-        text = text.strip()[:200] or REQUEST
+        text = text.strip()[:200] or self.world.request
         self.last_text, self.curio = text, curio
         with self.v.lock():
             self.world.home()  # every request starts the dog from the corridor's end
@@ -348,12 +383,13 @@ class DogDemo:
             self.say("I don't know which room.")
             return
         self.status = f"walking to {t.object_id}"
-        room = "north" if self.world.rooms[t.object_id][1] > 0 else "south"
-        self.say(f"Going to the {room} room." if curio
-                 else f"Dog's view only. The {room} room.")
+        color = self.world.layout.color_of(t.object_id)
+        room = f"the {color} room" if color != "grey" else (
+            "the north room" if self.world.rooms[t.object_id][1] > 0 else "the south room")
+        self.say(f"Going to {room}." if curio else f"Dog's view only. {room.capitalize()}.")
 
     def start_compare(self) -> None:
-        text = self.last_text or REQUEST
+        text = self.last_text or self.world.request
         self.compare = {}
         self.pending = [(text, False), (text, True)]
 
@@ -404,8 +440,8 @@ class DogDemo:
         self.decision, self.compare = None, {}
         self.status, self.result_line = "ready", "-"
         self._full = True
-        print(f"\nThe firefighter now faces {self.facing_name()}. Same words, other room: "
-              "press Enter.", flush=True)
+        print(f"\nThe firefighter now {self.facing_name()}. Same words, their left and right "
+              "have swapped: press Enter.", flush=True)
         self.say("Turned around.")
 
     # ---- drawing --------------------------------------------------------------------------
@@ -421,7 +457,8 @@ class DogDemo:
         if d is not None and d.target.object_id is not None:
             _marker(scn, self.world.room_goal(d.target.object_id), ROOM_MARK * 0.62, MAGENTA)
         if self.world.walking:  # follow the dog, half-way to the rooms (T5-20's camera)
-            tgt = 0.55 * np.array([*self.world.dog_xy(), 0.0]) + 0.45 * np.array([3.0, 0, 0])
+            mid = np.asarray(self.world.layout.overview()["lookat"], float)
+            tgt = 0.55 * np.array([*self.world.dog_xy(), 0.0]) + 0.45 * mid
             self.v.cam.lookat[:] = 0.9 * np.asarray(self.v.cam.lookat) + 0.1 * tgt
         if self._full:
             self._full = False
@@ -471,10 +508,12 @@ class DogDemo:
                 else "CURIO OFF   dog's view only")
         d = self.decision
         rate = f",  {self.rate:.1f}x real time" if self.rate and not self.world.walking else ""
-        left = ["Mode", "Voice", "Firefighter", "Request", "Room", "Truth", "Decision", "Dog",
+        left = ["Mode", "Voice", "Scene", "Firefighter", "Request", "Room", "Truth", "Decision", "Dog",
                 "Arrived"]
-        right = [mode, self.voice_line, f"faces {self.facing_name()}",
-                 f'"{d.text}"' if d else f'"{REQUEST}" (press Enter)',
+        right = [mode, self.voice_line,
+                 f"{self.world.kind} {self.world.seed}  ({len(self.world.rooms)} rooms)",
+                 self.facing_name(),
+                 f'"{d.text}"' if d else f'"{self.world.request}" (press Enter)',
                  f"{d.target.object_id or 'none'}  ({d.target.reason})" if d else "-",
                  d.oracle_why if d else "-",
                  self.verdict_names[d.verdict] if d else "-",
@@ -518,6 +557,16 @@ class DogDemo:
             self.turn()
         elif cmd == "r":
             self.load()
+        elif cmd == "n":
+            self.showcase_i = (self.showcase_i + 1) % len(SHOWCASE)
+            self.switch_to = SHOWCASE[self.showcase_i]
+        elif cmd == "scene":
+            from curio_robot.demo.dog_scenes import KINDS
+
+            if len(words) != 3 or words[1] not in KINDS or not words[2].isdigit():
+                print(f"usage: scene {'|'.join(KINDS)} SEED", flush=True)
+            else:
+                self.switch_to = (words[1], int(words[2]))
         else:
             self.run(line, self.curio)
         return True

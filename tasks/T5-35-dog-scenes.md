@@ -5,7 +5,7 @@ status: doing
 agent: claude
 budget: 120000
 depends: [T5-34]
-owns: [curio_robot/demo/dog_scenes.py, curio_robot/demo/dog.py, curio_robot/demo/viewer.py, curio_robot/demo/voice.py, scripts/dog_scenes_gate.py, tests/test_t5_35_dog_scenes.py, docs/demo.md, tasks/T5-35-dog-scenes.md, tasks/notes/T5-35.md]
+owns: [curio_robot/demo/dog_scenes.py, curio_robot/demo/dog.py, curio_robot/demo/viewer.py, curio_robot/demo/voice.py, scripts/dog_scenes_gate.py, tests/test_t5_35_dog_scenes.py, tests/test_t5_34_dog_demo.py, docs/demo.md, tasks/T5-35-dog-scenes.md, tasks/notes/T5-35.md]
 reads: [tasks/T5-34-dog-live-demo.md, tasks/notes/T5-34.md, curio_robot/demo/dog.py, curio_robot/resolver.py, curio_robot/sim/scenarios.py, scripts/poc/phys_scenes.py, scripts/poc/scenes_a.py, scripts/poc/kit.py, scripts/poc/phys_core.py, scripts/dog_demo_gate.py]
 accept: uv run pytest -q tests/test_t5_35_dog_scenes.py
 ---

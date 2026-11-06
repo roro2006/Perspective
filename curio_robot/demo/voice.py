@@ -55,18 +55,25 @@ COMMANDS = {
 DOG_OPENERS = ("the survivor's in the room", "survivor's in the room", "search the room",
                "go to the room", "check the room", "go check the room")
 DOG_SIDES = ("on my left", "on my right", "on your left", "on your right")
+# T5-35's buildings mark rooms by door colour: "the red room on my left", "... closest to me".
+DOG_COLOR_VERBS = ("the", "search the", "go to the", "check the")
+DOG_RELATIONS = (*DOG_SIDES, "closest to me", "furthest from me", "nearest me")
 DOG_COMMANDS = {
     "on": "on", "turn on": "on", "switch on": "on",
     "off": "off", "turn off": "off", "switch off": "off",
     "compare": "c", "compare both": "c", "show the difference": "c",
     "reset": "r", "reset the scene": "r",
     "turn around": "turn", "face the other way": "turn", "about face": "turn",
+    "next scene": "n", "next": "n", "next building": "n",
 }
 
 
 def requests(robot: str = "arm") -> list[str]:
     if robot == "dog":
-        return [f"{o} {side}" for o in DOG_OPENERS for side in DOG_SIDES]
+        out = [f"{o} {side}" for o in DOG_OPENERS for side in DOG_SIDES]
+        out += [f"{v} {c} room {rel}" for v in DOG_COLOR_VERBS for c in COLORS
+                for rel in DOG_RELATIONS]
+        return out
     out = []
     for verb in VERBS:
         for color in COLORS:
