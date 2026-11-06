@@ -172,6 +172,45 @@ def draw_twin(frame: CameraFrame, chosen: np.ndarray | None,
     return img
 
 
+# ---- one decision (shared by the browser engine and the MuJoCo viewer) -----------------------
+
+
+@dataclass(slots=True)
+class Decision:
+    result: dict  # JSON-ready: words, parse, map, target, reason, timings, truth, verdict
+    object_map: ObjectMap
+    chosen_id: str | None
+    chosen: np.ndarray | None  # the target's world position
+    oracle: np.ndarray | None  # ground-truth xy, or None
+
+
+def decide(world: SimWorld, scene: Scene, text: str, curio: bool) -> Decision:
+    """`pipeline.step` on fresh renders of the world as it stands, scored against ground truth.
+    Curio on fuses the head camera; off is the robot camera only. Doesn't move anything."""
+    frames = world.capture()
+    res = step(frames, text, SegmentationDetector(world.block_colors), use_human_view=curio)
+    target = res.target
+    oracle, why = oracle_xy(text, world.block_positions(), scene.eye, scene.look)
+    known = oracle is not None or why.startswith("there is no")
+    chosen = None if target.position is None else np.asarray(target.position, float)
+    req = parse_request(text)
+    result = {
+        "text": text,
+        "curio": curio,
+        "scene": scene.to_dict(),
+        "parsed": {"color": req.color, "relation": req.relation,
+                   "frame": "speaker" if req.speaker_frame else "robot"},
+        "objects": [{"id": o.object_id, "color": o.color, "seen_by": sorted(o.seen_by)}
+                    for o in res.object_map.objects],
+        "target_id": target.object_id,
+        "reason": target.reason,
+        "timings_ms": {k: round(v, 2) for k, v in res.timings_ms.items()},
+        "oracle": {"known": known, "why": why},
+        "verdict": verdict(chosen, oracle, why, known),
+    }
+    return Decision(result, res.object_map, target.object_id, chosen, oracle)
+
+
 # ---- the engine (worker thread only) --------------------------------------------------------
 
 
@@ -227,29 +266,11 @@ class Engine:
         w.home()
         self._om = self._chosen_id = self._chosen = None
         self._curio = curio
-        frames = w.capture()
-        res = step(frames, text, SegmentationDetector(w.block_colors), use_human_view=curio)
-        target = res.target
-        oracle, why = oracle_xy(text, w.block_positions(), self.scene.eye, self.scene.look)
-        known = oracle is not None or why.startswith("there is no")
-        self._om, self._chosen_id = res.object_map, target.object_id
-        self._chosen = None if target.position is None else np.asarray(target.position, float)
-        self._oracle = oracle
-        req = parse_request(text)
-        out = {
-            "text": text,
-            "curio": curio,
-            "scene": self.scene.to_dict(),
-            "parsed": {"color": req.color, "relation": req.relation,
-                       "frame": "speaker" if req.speaker_frame else "robot"},
-            "objects": [{"id": o.object_id, "color": o.color, "seen_by": sorted(o.seen_by)}
-                        for o in res.object_map.objects],
-            "target_id": target.object_id,
-            "reason": target.reason,
-            "timings_ms": {k: round(v, 2) for k, v in res.timings_ms.items()},
-            "oracle": {"known": known, "why": why},
-            "verdict": verdict(self._chosen, oracle, why, known),
-        }
+        d = decide(w, self.scene, text, curio)
+        self._om, self._chosen_id, self._chosen, self._oracle = (d.object_map, d.chosen_id,
+                                                                 d.chosen, d.oracle)
+        out = d.result
+        oracle = d.oracle
         emit({"type": "interpretation", **out})
         emit(self.frame(head=True))
         t_move = time.perf_counter()
