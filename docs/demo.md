@@ -243,6 +243,16 @@ You can also start on one: `--robot dog --scene corridor:0`.
 | `doorway` | Firefighter with their back to one wall, facing across; two same-colour doors on the far wall, one each side of them | "The blue room on my right" | Their left is along the corridor; to the dog both doors are on the same side, so it's a coin toss |
 | `closest` | Two or three same-colour doors along the corridor; firefighter at the west end | "The red room closest to me" / "furthest from me" | The dog's nearest is the firefighter's furthest |
 
+**Survivors vary too (T5-36).** In these three kinds each seed also picks the survivors:
+one, two or three in the meant room, sometimes one more in another room. Outfits: red jacket,
+navy coat, green hoodie, denim, orange overalls, white lab coat, hi-vis vest, or hard hat
+with hi-vis. Skin tones vary. Poses: lying, lying and waving, sitting against the wall, or
+sitting and waving. The top-left "Survivors" line says who is where. On arrival the dog says
+how many it found ("Found two survivors", "Nobody here"); that count comes from the
+simulator. Survivors are scenery: Curio never sees them and still picks the room from the
+floor map. `turn` moves them to the room the words now mean. The rescue scene keeps its one
+survivor.
+
 Showcase order (`n`): rescue 0, corridor 0, doorway 0, closest 0, corridor 1, doorway 1,
 closest 1. These were picked by the T5-35 gate's rule: Curio off wrong, Curio on right, and
 the walk worked. A good 2-minute run: rescue 0 (script above), then `n` to corridor 0 and
