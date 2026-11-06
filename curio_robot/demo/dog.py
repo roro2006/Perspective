@@ -284,7 +284,9 @@ DOG_INSET_PERIOD = 1.0  # s between dog-camera refreshes while it walks (a rende
 CATCH_UP_S = 0.4  # most simulated time made up in one frame after a slow one (a render)
 PAUSE_S = 1.5
 # Showcase scenes, picked from the T5-35 gate by its rule (Curio off wrong, on right, walked).
-SHOWCASE: tuple[tuple[str, int], ...] = (("rescue", 0),)
+SHOWCASE: tuple[tuple[str, int], ...] = (
+    ("rescue", 0), ("corridor", 0), ("doorway", 0), ("closest", 0),
+    ("corridor", 1), ("doorway", 1), ("closest", 1))
 ROOM_MARK = 0.28  # m, the floor discs at the chosen and the true room's goal
 
 HELP = """Type a request and press Enter, e.g.  The red room on my left

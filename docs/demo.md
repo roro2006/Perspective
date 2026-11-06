@@ -229,10 +229,32 @@ the mode, the request, the room chosen and why, the truth, and where the dog sto
 3. *"The firefighter turns round. Same words."* Say *"Curio, turn around"*, then the request again. The
    dog goes to the south room, where the survivor now is.
 
+**More buildings (T5-35).** Besides this rescue corridor there are three kinds of building,
+each generated from a seed like the arm's scenes: 11-14 m corridors with 3-6 rooms, each door
+in a colour (red, blue, green, yellow), the room tinted to match. `n` steps through the
+showcase list; `scene doorway 1` loads one directly. Changing building closes the window and
+reopens it on the new one (about 2 s). The terminal, the voice and the Curio switch carry over.
+You can also start on one: `--robot dog --scene corridor:0`.
+
+| Kind | Set-up | Request | Why the dog alone gets it wrong |
+|---|---|---|---|
+| `rescue` | T5-34's corridor, two plain rooms | "Survivor's in the room on my left" | Face to face, left flips |
+| `corridor` | Firefighter at the west end facing the dog; two same-colour doors face each other across the corridor, plus others | "The green room on my right" | Face to face, left flips |
+| `doorway` | Firefighter with their back to one wall, facing across; two same-colour doors on the far wall, one each side of them | "The blue room on my right" | Their left is along the corridor; to the dog both doors are on the same side, so it's a coin toss |
+| `closest` | Two or three same-colour doors along the corridor; firefighter at the west end | "The red room closest to me" / "furthest from me" | The dog's nearest is the firefighter's furthest |
+
+Showcase order (`n`): rescue 0, corridor 0, doorway 0, closest 0, corridor 1, doorway 1,
+closest 1. These were picked by the T5-35 gate's rule: Curio off wrong, Curio on right, and
+the walk worked. A good 2-minute run: rescue 0 (script above), then `n` to corridor 0 and
+`c`, then doorway 0 and `c`, then closest 0 and `c`.
+
 Voice phrases: *"Curio, "* + *the survivor's in the room / survivor's in the room / search
 the room / go to the room / check the room / go check the room* + *on my left / on my right
-/ on your left / on your right*, and *compare, on, off, reset, turn around*.
-Typed: any request, `c`, `on`, `off`, `turn`, `r`, `h`, `q`.
+/ on your left / on your right*; or *the / search the / go to the / check the* + *red / blue
+/ green / yellow* + *room* + *on my left / on my right / on your left / on your right /
+closest to me / furthest from me / nearest me*; and *compare, on, off, reset, turn around,
+next scene*. Typed: any request, `c`, `on`, `off`, `turn`, `n`, `scene KIND SEED`, `r`,
+`h`, `q`.
 
 **Live and scripted, for the dog**
 
@@ -253,6 +275,11 @@ meant room 4/4 (off 2/4: wrong whenever the two face each other); end to end it 
 meant room 12/12. The live loop can run 5.5x real time with the insets on. The paced run
 viewers see manages 0.97x: each dog-camera refresh costs about 0.2 s, and the dog catches up
 after it.
+
+The generated buildings (out/t5_35/gate.md, run once, gate set before building), per kind:
+the dog reached every room of seeds 0-9 within 0.35 m (corridor 44/44, doorway 35/35,
+closest 34/34, 0 falls). Curio on picked the meant room 50/50 in each kind; Curio off got
+0/50 (corridor), 26/50 (doorway, chance) and 0/50 (closest). End to end, 10/10 per kind.
 
 **If something goes wrong:** the dog falls or stops short: `r`, then the request again
 (every request starts it from the corridor's end). Window frozen: `q` and restart, about 5 s.
