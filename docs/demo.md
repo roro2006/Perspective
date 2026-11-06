@@ -1,4 +1,8 @@
-# How to demo Curio (T5-33)
+# How to demo Curio (T5-33, T5-34)
+
+There are two live demos in the same viewer: **the arm** (sections 1-9, the default) and
+**the rescue dog** (section 10, `--robot dog`). Do the arm first. It is the easiest to
+follow. The dog then shows that the same idea works when the robot can't see the person.
 
 Curio lets a robot follow "the red one on my left" from **your** side of the table. Face to
 face, your left is the robot's right, and most robots get that backwards. This demo shows it
@@ -136,7 +140,8 @@ Say this plainly if anyone asks. Don't claim more.
   (Source: docs/target5-summary.md.)
 - **"Does it work with existing robot policies?"** *"That's the next test. We put Curio in
   front of policies trained by others: the LIBERO evaluation hasn't run yet, and the Go2
-  navigation policy we ported failed its own qualification before Curio was tested."*
+  navigation policy we ported failed its own qualification before Curio was tested. The dog
+  demo uses a pretrained walking policy with our own path follower."*
 - **"How fast is it?"** Point at the latency in the terminal: detection and resolution take a
   few milliseconds. The pause before the arm moves is the cameras rendering on a laptop.
 
@@ -189,3 +194,66 @@ Keys: Enter runs, Space switches Curio on and off, Esc cancels. Options: `--port
 
 Code: `curio_robot/demo/` (`viewer.py`, `session.py`, `server.py`, `status.py`,
 `static/index.html`). Tests: `uv run pytest -q tests/test_t5_33_demo.py`.
+
+---
+
+## 10. The second demo: the rescue dog (T5-34)
+
+A firefighter stands at the end of a smoky corridor, facing down it. A Unitree Go2 comes in
+from the other end, facing them, so the firefighter's left is the dog's right. They say
+*"Survivor's in the room on my left"* and the dog has to pick the right one of two side rooms.
+It can't see the firefighter through the smoke.
+
+**Start it** (same terminal habits as the arm):
+```
+uv run python -m curio_robot.demo.viewer --robot dog
+```
+The first time on a new machine, fetch the Go2 model and walking policy and convert the
+weights (see third_party/README.md), then:
+`uv run python scripts/poc/export_policies.py --go2`. If the files aren't found, the viewer
+says so and exits.
+
+**On screen:** the corridor from above, following the dog while it walks. On the floor, a
+green disc marks the room the firefighter meant (simulator truth) and a magenta disc marks
+the room Curio chose. Top right: the firefighter's head camera and the dog's camera. Top left:
+the mode, the request, the room chosen and why, the truth, and where the dog stopped.
+
+**The 45-second script**
+1. *"The dog can't see the firefighter. They're at the far end and say which room."* Say *"Curio,
+   survivor's in the room on my left"* (or press Enter). The dog walks to the north room,
+   about 12 s. **CORRECT**, "in the room the firefighter meant".
+2. *"Without Curio the dog uses its own left."* Say *"Curio, compare"*. Curio off sends it
+   to the south room (**WRONG**), then Curio on sends it north (**CORRECT**). Do this
+   **before** step 3: once they've turned round, their left and the dog's agree, and both are
+   right.
+3. *"The firefighter turns round. Same words."* Say *"Curio, turn around"*, then the request again. The
+   dog goes to the south room, where the survivor now is.
+
+Voice phrases: *"Curio, "* + *the survivor's in the room / survivor's in the room / search
+the room / go to the room / check the room / go check the room* + *on my left / on my right
+/ on your left / on your right*, and *compare, on, off, reset, turn around*.
+Typed: any request, `c`, `on`, `off`, `turn`, `r`, `h`, `q`.
+
+**Live and scripted, for the dog**
+
+| Live | Not Curio, or not live |
+|---|---|
+| The physics: the Go2 walks under a pretrained walking policy (cagataydev, Isaac Lab, CC-BY-4.0) in MuJoCo, stepped live | The route: **our** path follower through the corridor's door waypoints. Curio only chooses the room |
+| The firefighter's head-camera pose and the dog's camera pose, read from the scene | The rooms come from the building's floor map, not from a detector. No VLM on this laptop |
+| The choice of room: the same rule resolver as the arm demo, ranking the two rooms from whoever is speaking | The firefighter and survivor are posed figures (they don't move on their own) |
+| The check against the simulator's truth | The navigation policy we tried to use instead (T5-32) failed its own qualification and is not used |
+
+Credit the walking policy if you show this publicly: "cagataydev / strands-robots Isaac Lab
+showcase (strands-labs/robots#4227)", Go2 model by Unitree Robotics (MuJoCo Menagerie). The
+bottom-right overlay already says it.
+
+**Measured** (out/t5_34/gate.md, run once on this laptop, gate set before building): the dog
+reaches either room within 0.35 m on 20/20 jittered starts with 0 falls; Curio on picks the
+meant room 4/4 (off 2/4: wrong whenever the two face each other); end to end it ends in the
+meant room 12/12. The live loop can run 5.5x real time with the insets on. The paced run
+viewers see manages 0.97x: each dog-camera refresh costs about 0.2 s, and the dog catches up
+after it.
+
+**If something goes wrong:** the dog falls or stops short: `r`, then the request again
+(every request starts it from the corridor's end). Window frozen: `q` and restart, about 5 s.
+Can't start: present the arm only and describe the dog with the T5-20 video.

@@ -35,7 +35,7 @@ def wilson(k: int, n: int, z: float = 1.96) -> list[float]:
     p = k / n
     c = (p + z * z / (2 * n)) / (1 + z * z / n)
     h = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
-    return [round(max(0.0, c - h), 3), round(min(1.0, c + h), 3)]
+    return [round(float(max(0.0, c - h)), 3), round(float(min(1.0, c + h)), 3)]
 
 
 def walk(w: dog.DogWorld, room: str) -> dict:

@@ -2,7 +2,8 @@
 
 Downloaded robot models and policies used by the T5-20 physical scenes (`scripts/poc/phys_*`).
 Everything here except this file is gitignored; it lives in the main checkout at
-`C:/Users/Rohan/dev/Perspective/third_party/`. Fetched 2026-11-04 (T5-32's row 2026-11-05),
+`C:/Users/Rohan/dev/Perspective/third_party/`. The code looks in `$CURIO_THIRD_PARTY`, then
+this checkout's `third_party/`, then that path (scripts/poc/phys_core.py). Fetched 2026-11-04 (T5-32's row 2026-11-05),
 exactly these files and nothing else.
 
 | Folder | Source | Revision | Licence | Size |
@@ -22,3 +23,11 @@ above (e.g. in the description or credits).
 The T5-32 navigation and walking policies are kouylty's (MIT); credit "kouylty /
 Isaac-Go2-Navigation-Rough-v0, trained in NVIDIA Isaac Lab" and Unitree Robotics for the Go2
 when showing them.
+
+**Demo laptop (T5-34, 2026-11-06).** For the live dog demo, only the Go2's two rows were fetched
+again into `C:/Users/Harry/Desktop/MoreProjects/Perspective/third_party/`, at the same pinned
+revisions: Menagerie `unitree_go2/` (all 25 files, through the GitHub tree API at
+`98a70c5`, 30 MB) and the six cagataydev files at `0167965` (1.2 MB).
+`export_policies.py --go2` wrote `derived/go2_rough.npz`; its check against onnxruntime
+(installed only for that one run, with `uv run --with onnxruntime`, not in the project env)
+gave max |numpy - onnxruntime| 3.3e-6, as on the GPU box. No G1 or T5-32 files are on the laptop.
