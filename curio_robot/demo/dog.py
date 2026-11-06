@@ -80,6 +80,9 @@ class DogWorld:
         self.fall_z = FALL_Z
         self.rooms = self.layout.room_xyz()
         self._kinematic()
+        self._contact_sets()
+        self.survivor_rooms: dict[str, str] = {}
+        self.survivor_contacts = 0  # dog-survivor contacts since home (the T5-36 gate's count)
         self.facing = float(self.layout.ff[2])
         self.fell = False
         self.min_z = 9.0
@@ -131,17 +134,55 @@ class DogWorld:
         mujoco.mj_forward(m, d)
         self._saved = d.qpos[self.kq].copy()
         self.fell, self.min_z, self.sim_t, self.goal = False, 9.0, 0.0, None
+        self.survivor_contacts = 0
 
     def _place_people(self) -> None:
         m, d = self.model, self.data
         fx, fy, _ = self.layout.ff
         self._pose(m, d, "p_", (fx, fy, FF_Z), self._euler(yaw=self.facing),
                    self.layout.ff_angles)
-        # The survivor is in the room the scene's own words mean (the story's truth).
+        # The survivors are in the room the scene's own words mean (the story's truth); with
+        # no truth for the words they wait off the map.
         rid, _ = oracle_room(self.request, self)
-        pos, yaw = self.layout.survivor(rid) if rid else (HIDDEN, 0.0)
-        self._pose(m, d, "s_", pos, self._euler(pitch=-np.pi / 2, yaw=yaw),
-                   {"l_sh_abd": 0.5, "r_sh_abd": -0.9, "l_knee": 0.4})
+        self.survivor_rooms = {}
+        if rid is None:
+            for prefix in self._survivor_prefixes():
+                self._pose(m, d, prefix, HIDDEN, self._euler(pitch=-np.pi / 2), {})
+            return
+        for prefix, room, pos, (roll, pitch, yaw), angles in self.layout.place_survivors(rid):
+            self._pose(m, d, prefix, pos, self._euler(roll, pitch, yaw), angles)
+            self.survivor_rooms[prefix] = room
+
+    def _survivor_prefixes(self) -> list[str]:
+        names = [self.model.joint(j).name for j in range(self.model.njnt)]
+        return [n[:-4] for n in names if n.startswith("s") and n.endswith("_free")]
+
+    def survivors_in(self, room: str) -> int:
+        return sum(r == room for r in self.survivor_rooms.values())
+
+    def survivor_summary(self) -> str:
+        """Who is where, e.g. "2 in green_2: hi-vis vest (lying), denim (sitting)"."""
+        info = {sv.prefix: sv.describe() for sv in self.layout.survivors}
+        by_room: dict[str, list[str]] = {}
+        for prefix, room in self.survivor_rooms.items():
+            by_room.setdefault(room, []).append(info.get(prefix, "lying down"))
+        if not by_room:
+            return "none placed (no truth for the scene's words)"
+        return "; ".join(f"{len(v)} in {r}: {', '.join(v)}" for r, v in by_room.items())
+
+    def _contact_sets(self) -> None:
+        m = self.model
+        root = {b: b for b in range(m.nbody)}
+        for b in range(1, m.nbody):  # the top body under the world for every body
+            r = b
+            while m.body_parentid[r] != 0:
+                r = m.body_parentid[r]
+            root[b] = r
+        dog = {b for b in range(m.nbody) if m.body(root[b]).name.startswith("go2_")}
+        surv = {b for b in range(m.nbody)
+                if m.body(root[b]).name.startswith("s") and m.body(root[b]).name.endswith("root")}
+        self._dog_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] in dog}
+        self._surv_geoms = {g for g in range(m.ngeom) if m.geom_bodyid[g] in surv}
 
     def turn_firefighter(self) -> None:
         """Face the other way: left and right swap for the same words."""
@@ -179,6 +220,11 @@ class DogWorld:
             if z < self.fall_z:
                 self.fell = True
             self.sim_t += m.opt.timestep
+            if self._surv_geoms:
+                for c in d.contact[:d.ncon]:
+                    g = {int(c.geom1), int(c.geom2)}
+                    if g & self._dog_geoms and g & self._surv_geoms:
+                        self.survivor_contacts += 1
 
     def dog_xy(self) -> np.ndarray:
         x, y, _ = self.dog.pose()
@@ -326,6 +372,7 @@ class DogDemo:
         self.pause_until = 0.0
         self.status = "ready"
         self.result_line = "-"
+        self.found_line = "-"
         self.say = lambda text: None
         self.voice_line = "off (terminal only)"
         self._head: Image.Image | None = None
@@ -346,7 +393,7 @@ class DogDemo:
         with self.v.lock():
             self.world.home()
         self.decision, self.compare, self.pending = None, {}, []
-        self.status, self.result_line = "ready", "-"
+        self.status, self.result_line, self.found_line = "ready", "-", "-"
         self._full = True
         w = self.world
         print(f"\nScene {w.kind} {w.seed}: {len(w.rooms)} rooms. The firefighter "
@@ -378,6 +425,7 @@ class DogDemo:
               f"  truth    {d.oracle_why}\n"
               f"  decision {self.verdict_names[d.verdict]}   resolve {d.resolve_ms} ms",
               flush=True)
+        self.found_line = "-"
         self._full = True
         self._walk_wall = time.perf_counter()
         if t.object_id is None:
@@ -421,15 +469,17 @@ class DogDemo:
         else:
             err = float(np.linalg.norm(w.dog_xy() - w.room_goal(d.target.object_id)))
             self.status = f"stopped {err:.2f} m from {d.target.object_id}'s goal"
+            found = w.survivors_in(d.target.object_id)
+            words = {0: "Nobody here.", 1: "Found one survivor.", 2: "Found two survivors.",
+                     3: "Found three survivors."}.get(found, f"Found {found} survivors.")
             if d.oracle_id is None:
                 self.result_line = "truth unknown for these words"
-                self.say("In the room.")
             elif arrived_at(w, d.oracle_id):
                 self.result_line = "in the room the firefighter meant"
-                self.say("In the room. Searching.")
             else:
                 self.result_line = "in the wrong room"
-                self.say("In the room. Nobody here.")
+            self.found_line = f"{found} survivor{'s' if found != 1 else ''} in this room"
+            self.say(words)
         self.compare[d.curio] = d
         print(f"  walk     {self.status} in {w.sim_t:.1f} s simulated, "
               f"{self.rate or 0:.1f}x real time; {self.result_line}", flush=True)
@@ -440,7 +490,7 @@ class DogDemo:
         with self.v.lock():
             self.world.turn_firefighter()
         self.decision, self.compare = None, {}
-        self.status, self.result_line = "ready", "-"
+        self.status, self.result_line, self.found_line = "ready", "-", "-"
         self._full = True
         print(f"\nThe firefighter now {self.facing_name()}. Same words, their left and right "
               "have swapped: press Enter.", flush=True)
@@ -510,17 +560,19 @@ class DogDemo:
                 else "CURIO OFF   dog's view only")
         d = self.decision
         rate = f",  {self.rate:.1f}x real time" if self.rate and not self.world.walking else ""
-        left = ["Mode", "Voice", "Scene", "Firefighter", "Request", "Room", "Truth", "Decision", "Dog",
-                "Arrived"]
+        left = ["Mode", "Voice", "Scene", "Firefighter", "Survivors", "Request", "Room", "Truth",
+                "Decision", "Dog", "Arrived", "Found"]
         right = [mode, self.voice_line,
                  f"{self.world.kind} {self.world.seed}  ({len(self.world.rooms)} rooms)",
                  self.facing_name(),
+                 self.world.survivor_summary(),
                  f'"{d.text}"' if d else f'"{self.world.request}" (press Enter)',
                  f"{d.target.object_id or 'none'}  ({d.target.reason})" if d else "-",
                  d.oracle_why if d else "-",
                  self.verdict_names[d.verdict] if d else "-",
                  f"{self.status}{rate}  (live physics)",
-                 self.result_line]
+                 self.result_line,
+                 self.found_line]
         texts = [(big, int(mujoco.mjtGridPos.mjGRID_TOPLEFT), "\n".join(left), "\n".join(right))]
         if len(self.compare) == 2:
             off, on = self.compare[False], self.compare[True]

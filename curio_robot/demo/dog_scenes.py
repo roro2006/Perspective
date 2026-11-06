@@ -43,6 +43,114 @@ FF_ANGLES = {"neck_pitch": 0.05, "l_elbow": -0.15, "r_elbow": -0.15}
 FF_RESCUE = {"neck_pitch": 0.05, "l_sh_pitch": -0.5, "l_sh_abd": 1.45, "l_elbow": -0.1}
 SURVIVOR_ANGLES = {"l_sh_abd": 0.5, "r_sh_abd": -0.9, "l_knee": 0.4}
 
+# ---- survivors (T5-36) -----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Outfit:
+    name: str
+    suit: tuple[float, float, float]
+    accent: tuple[float, float, float]
+    boots: tuple[float, float, float] = (0.12, 0.12, 0.14)
+    stripes: tuple[float, float, float] | None = None  # hi-vis bands round the torso
+    helmet: tuple[float, float, float] | None = None
+
+
+OUTFITS = (
+    Outfit("red jacket", (0.72, 0.12, 0.12), (0.9, 0.9, 0.9)),
+    Outfit("navy coat", (0.12, 0.16, 0.34), (0.7, 0.7, 0.75)),
+    Outfit("green hoodie", (0.2, 0.45, 0.25), (0.9, 0.9, 0.85)),
+    Outfit("denim", (0.25, 0.38, 0.6), (0.85, 0.8, 0.7), (0.35, 0.22, 0.12)),
+    Outfit("orange overalls", (0.92, 0.45, 0.1), (0.2, 0.2, 0.22)),
+    Outfit("white lab coat", (0.92, 0.92, 0.9), (0.3, 0.5, 0.8)),
+    Outfit("hi-vis vest", (0.3, 0.3, 0.32), (0.95, 0.9, 0.1), stripes=(0.85, 0.95, 0.15)),
+    Outfit("hard hat and hi-vis", (0.25, 0.27, 0.3), (0.95, 0.6, 0.1),
+           stripes=(0.98, 0.55, 0.1), helmet=(0.98, 0.85, 0.1)),
+)
+SKINS = ((0.96, 0.8, 0.69), (0.86, 0.68, 0.55), (0.72, 0.53, 0.4), (0.55, 0.38, 0.26),
+         (0.36, 0.24, 0.17))
+POSES = ("lying", "lying, waving", "sitting", "sitting, waving")
+COUNT_P = (0.40, 0.35, 0.25)  # 1, 2 or 3 in the meant room
+EXTRA_P = 0.35  # one more survivor in another room
+SITTER_HALF = 0.28  # m, half width of a sitter across the shoulders and arms
+DOG_HALF = 0.2  # m, the Go2's half width plus a margin
+HAT = '<geom type="cylinder" pos="0.0 0.0 0.26" size="0.08 0.025"'
+
+
+@dataclass(frozen=True)
+class Survivor:
+    prefix: str
+    outfit: Outfit
+    skin: tuple[float, float, float]
+    pose: str
+    spot: str  # "back" (lying), "front_l" / "front_r" (sitting)
+    meant: bool  # in the meant room (else in `other_rank`-th other room)
+    head_east: bool = True
+
+    def describe(self) -> str:
+        return f"{self.outfit.name} ({self.pose})"
+
+
+def survivor_xml(sv: Survivor) -> str:
+    from kit import Palette, humanoid
+
+    o = sv.outfit
+    extra = ""
+    if o.stripes is not None:
+        c = " ".join(f"{v:.2f}" for v in o.stripes)
+        extra = "".join(f'<geom type="cylinder" pos="0 0 {z}" size="0.139 0.018" '
+                        f'rgba="{c} 1" contype="0" conaffinity="0"/>' for z in (0.12, 0.26))
+    xml = humanoid(sv.prefix, Palette(o.suit, sv.skin, sv.skin, o.accent, o.boots),
+                   head_cam=False, extra_torso=extra)
+    if o.helmet is not None:  # the cap geom becomes a hard hat with a brim
+        c = " ".join(f"{v:.2f}" for v in o.helmet)
+        i = xml.index(HAT)
+        j = xml.index("/>", i) + 2
+        xml = (xml[:i] + f'<geom type="sphere" pos="0 0 0.21" size="0.125" rgba="{c} 1"/>'
+               f'<geom type="cylinder" pos="0 0 0.2" size="0.16 0.012" rgba="{c} 1"/>'
+               + xml[j:])
+    return xml
+
+
+def pose_of(sv: Survivor, room: Room) -> tuple[tuple, tuple, dict]:
+    """(position, (roll, pitch, yaw), joint angles) for one survivor in `room`. The spots keep
+    clear of the dog's route (door x .. goal x + 0.3) and of the walls: lying along the back
+    wall, or sitting in a front corner facing the door with legs out toward it."""
+    a, s = FIRST + SLOT * room.slot, room.side
+    wave = "waving" in sv.pose
+    if sv.spot == "back":
+        yaw = 0.0 if sv.head_east else np.pi  # pitch -pi/2 puts the head toward -x first
+        angles = {"l_sh_abd": 0.35, "r_sh_abd": -0.35, "l_knee": 0.3}
+        if wave:
+            angles |= {"r_sh_pitch": -2.6, "r_sh_abd": -0.2, "r_elbow": -0.4}
+        return (a + SLOT / 2, s * 3.3, 0.15), (0.0, -np.pi / 2, yaw), angles
+    x = a + (0.42 if sv.spot == "front_l" else SLOT - SITTER_HALF - 0.08)
+    angles = {"l_hip_pitch": -1.5, "r_hip_pitch": -1.5, "l_knee": 0.15, "r_knee": 0.25,
+              "l_elbow": -0.6, "r_elbow": -0.6, "l_sh_pitch": -0.3, "r_sh_pitch": -0.3}
+    if wave:
+        angles |= {"r_sh_pitch": -2.7, "r_elbow": -0.3}
+    return (x, s * 2.65, 0.125), (0.0, 0.0, -s * np.pi / 2), angles
+
+
+def draw_survivors(seed: int, kind: str) -> list[Survivor]:
+    """A separate random stream from the layout's, so rooms and words don't change."""
+    rng = np.random.default_rng([4, NEW_KINDS.index(kind), seed])
+    n = int(rng.choice([1, 2, 3], p=COUNT_P))
+    out = []
+    spots = ("back", "front_l", "front_r")
+    names = ("s_", "s1_", "s2_", "s3_")
+    for i in range(n):
+        spot = spots[i]
+        pose = str(rng.choice(POSES[:2] if spot == "back" else POSES[2:]))
+        out.append(Survivor(names[i], OUTFITS[int(rng.integers(len(OUTFITS)))],
+                            SKINS[int(rng.integers(len(SKINS)))], pose, spot, True,
+                            bool(rng.random() < 0.5)))
+    if rng.random() < EXTRA_P:
+        out.append(Survivor(names[n], OUTFITS[int(rng.integers(len(OUTFITS)))],
+                            SKINS[int(rng.integers(len(SKINS)))],
+                            str(rng.choice(POSES[:2])), "back", False, bool(rng.random() < 0.5)))
+    return out
+
 
 @dataclass(frozen=True)
 class Room:
@@ -73,6 +181,7 @@ class Layout:
     lane: float = 0.0
     smoke: list[float] = field(default_factory=list)
     ff_angles: dict = field(default_factory=lambda: dict(FF_ANGLES))
+    survivors: list[Survivor] = field(default_factory=list)
 
     # ---- what DogWorld asks of a layout --------------------------------------------------
 
@@ -88,9 +197,18 @@ class Layout:
         pts = [(x + 0.8, self.lane), (x, 0.6 * s), (x + 0.05, 1.7 * s), tuple(r.goal)]
         return pts, r.goal
 
-    def survivor(self, rid: str) -> tuple[tuple[float, float, float], float]:
-        r = self.rooms[rid]
-        return (r.door_x + 0.4, r.side * (HALF_W + ROOM_D * 0.66), 0.15), -r.side * np.pi * 0.15
+    def other_room(self, meant: str) -> str:
+        """Where the extra survivor is: the first room, in id order, that isn't meant."""
+        return next(rid for rid in sorted(self.rooms) if rid != meant)
+
+    def place_survivors(self, meant: str) -> list[tuple[str, str, tuple, tuple, dict]]:
+        """(prefix, room id, position, (roll, pitch, yaw), angles) for every survivor, with
+        the meant room's group in `meant`."""
+        out = []
+        for sv in self.survivors:
+            rid = meant if sv.meant else self.other_room(meant)
+            out.append((sv.prefix, rid, *pose_of(sv, self.rooms[rid])))
+        return out
 
     def overview(self) -> dict:
         mid = (WEST + self.length) / 2
@@ -130,8 +248,7 @@ class Layout:
                          + " 1", paint))
         smoke = "".join(box((x, 0, 0.9), (0.5, 0.85, 0.9), "0.55 0.55 0.57 0.25", paint)
                         for x in self.smoke)
-        survivor = humanoid("s_", Palette((0.55, 0.15, 0.15), (0.8, 0.62, 0.5),
-                                          (0.8, 0.62, 0.5), (0.9, 0.9, 0.9)), head_cam=False)
+        survivor = "".join(survivor_xml(sv) for sv in self.survivors)
         ff = humanoid("p_", Palette((0.45, 0.36, 0.2), PERSON.skin, (0.1, 0.1, 0.12),
                                     (0.95, 0.95, 0.2)))
         xml = shell("".join(w) + smoke + survivor + ff, floor="concrete",
@@ -163,9 +280,11 @@ class RescueLayout(Layout):
         (leg,) = self._scene.legs({"geo": rid})
         return leg.route, np.asarray(leg.goal, float)
 
-    def survivor(self, rid: str) -> tuple[tuple[float, float, float], float]:
-        s = 1 if self._rooms[rid][1] > 0 else -1
-        return (2.4, 2.9 * s, 0.15), np.pi * 0.85 * s
+    def place_survivors(self, meant: str) -> list[tuple[str, str, tuple, tuple, dict]]:
+        """T5-34's single survivor, as before."""
+        s = 1 if self._rooms[meant][1] > 0 else -1
+        return [("s_", meant, (2.4, 2.9 * s, 0.15), (0.0, -np.pi / 2, np.pi * 0.85 * s),
+                 dict(SURVIVOR_ANGLES))]
 
     def overview(self) -> dict:
         return {"lookat": (3.2, 0.0, 0.0), "distance": 12.5, "azimuth": 112.0,
@@ -257,4 +376,6 @@ def closest(seed: int) -> Layout:
 def make(kind: str, seed: int = 0) -> Layout:
     if kind == "rescue":
         return RescueLayout()
-    return {"corridor": corridor, "doorway": doorway, "closest": closest}[kind](seed)
+    layout = {"corridor": corridor, "doorway": doorway, "closest": closest}[kind](seed)
+    layout.survivors = draw_survivors(seed, kind)
+    return layout
