@@ -204,3 +204,31 @@ def test_voice_round_trip_on_windows(tmp_path):
     time.sleep(0.3)
     listener.close()
     assert got == ["give me the blue block closest to me"]
+
+
+@pytest.mark.parametrize("seat", [None, 90.0, 180.0, -150.0])
+def test_handover_puts_the_chosen_block_in_front_of_the_person(seat):
+    from curio_robot.demo.handover import HandOver
+    from curio_robot.demo.session import Scene, decide, seat_person
+    from curio_robot.sim.world import HOME_QPOS
+
+    with SimWorld(*PANE, person_body=True) as w:
+        sc = SCENARIOS["perspective"](w, np.random.default_rng(0))
+        scene = Scene("perspective", 0, sc.request, sc.expected_xy, sc.human_eye, sc.human_look)
+        if seat is not None:
+            scene = seat_person(w, scene, seat)
+        d = decide(w, scene, sc.request, True)
+        h = HandOver(w, d.chosen, scene.eye, scene.look)
+        start = w.model.body(h.body).pos.copy()
+        events = []
+        for _ in range(30 * 20):
+            e = h.step(1 / 30)
+            if e:
+                events.append(e)
+            if h.done:
+                break
+        end = w.model.body(h.body).pos.copy()
+        assert h.result == "handed over" and events == ["attach", "release"]
+        assert np.linalg.norm(start[:2] - d.chosen[:2]) < 0.02  # it took the chosen block
+        assert np.linalg.norm(end[:2] - h.offer) < 0.02 and abs(end[2] - 0.0125) < 1e-6
+        assert np.allclose(w.data.qpos[:6], HOME_QPOS)  # and went home

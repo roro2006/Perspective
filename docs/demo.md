@@ -53,8 +53,8 @@ narration to the audience is in italics.
 |---|---|---|
 | 0 | (nothing) | *"This is a simulation. The arm motion is scripted. What's live is Curio working out which block you mean, from your side, on whatever you type."* |
 | 1 | (nothing) | *"The person sits across the table. Two identical red blocks. They say: hand me the red one on my left."* |
-| 2 | "Curio, off", then "Curio, hand me the red one on my left" (`off`, Enter) | *"Robot camera only. It reads 'left' as its own left..."* The arm goes to the wrong block. Result: **WRONG** (magenta disc away from the green one). |
-| 3 | "Curio, on", then the same sentence (`on`, Enter) | *"Now Curio adds the person's view, so 'my left' means their left."* Result: **CORRECT**, magenta on green. |
+| 2 | "Curio, off", then "Curio, hand me the red one on my left" (`off`, Enter) | *"Robot camera only. It reads 'left' as its own left..."* The arm picks up the **wrong** red block and hands it to the person. Result: **WRONG** (the magenta disc, where it took the block from, is away from the green one). |
+| 3 | "Curio, on", then the same sentence (`on`, Enter) | *"Now Curio adds the person's view, so 'my left' means their left."* The arm picks up the right block and sets it down in front of the person: *"Here you go."* Result: **CORRECT**, magenta on green. Each request starts from the scene's own layout, so the block is back on the table every time. |
 | 4 | "Curio, walk around" (`seat 180`) | The person walks round to stand beside the robot. *"Now I'm standing next to the robot. Same words."* |
 | 5 | "Curio, hand me the red one on my left" (Enter) | Curio picks the **other** red block: CORRECT. *"My left changed when I moved, and Curio followed me."* |
 | 6 | "Curio, compare" (`c`) | Off and on are both CORRECT here. *"Standing beside it, my left is the robot's left, so even the robot alone gets it. Curio is right from every seat; the robot alone is right only from its own."* Then "Curio, go back" (`seat 0`). |
@@ -121,7 +121,7 @@ Say this plainly if anyone asks. Don't claim more.
 
 | Live (computed every time you press Enter) | Scripted or simulated |
 |---|---|
-| Rendering the head camera and the robot camera from the current scene | The arm motion: inverse kinematics to the chosen block, no grasp, **not a learned policy** |
+| Rendering the head camera and the robot camera from the current scene | The pick and hand-over: scripted inverse-kinematics motion; the block is carried once the jaws close (no contact physics), **not a learned policy** |
 | Detecting blocks, fusing both views into one map, working out whose left | Scene layouts: a seeded generator, random but repeatable |
 | Choosing the block from whatever you type | The person: a simulated camera, not a real person or camera |
 | Checking the choice against the simulator's ground truth | The language reading: keyword rules, not the trained model (which isn't on this laptop). Speech is Windows' offline recognizer, listening for a fixed list of sentences |
@@ -182,7 +182,8 @@ Keys: Enter runs, Space switches Curio on and off, Esc cancels. Options: `--port
  │   pipeline.step()     -> detector -> fusion (seen_by) -> perspective -> rule  │
  │   oracle_xy()         -> ground truth from true positions and the person's    │
  │                          true eye and gaze                                    │
- │ then: IK steps toward the chosen block (scripted motion)                      │
+ │ then: pick it up and set it down in front of the person (handover.py,         │
+ │       scripted kinematic motion: the block is carried once the jaws close)    │
  └───────────────────────────────────────────────────────────────────────────────┘
 ```
 

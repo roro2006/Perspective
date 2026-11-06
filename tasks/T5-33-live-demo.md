@@ -5,7 +5,7 @@ status: doing
 agent: claude
 budget: 120000
 depends: [T5-27]
-owns: [curio_robot/sim/world.py, curio_robot/demo/__init__.py, curio_robot/demo/__main__.py, curio_robot/demo/viewer.py, curio_robot/demo/voice.py, curio_robot/demo/listen.ps1, curio_robot/demo/session.py, curio_robot/demo/server.py, curio_robot/demo/status.py, curio_robot/demo/static/index.html, tests/test_t5_33_demo.py, docs/demo.md, tasks/T5-33-live-demo.md, tasks/notes/T5-33.md]
+owns: [curio_robot/sim/world.py, curio_robot/demo/__init__.py, curio_robot/demo/__main__.py, curio_robot/demo/viewer.py, curio_robot/demo/handover.py, curio_robot/demo/voice.py, curio_robot/demo/listen.ps1, curio_robot/demo/session.py, curio_robot/demo/server.py, curio_robot/demo/status.py, curio_robot/demo/static/index.html, tests/test_t5_33_demo.py, docs/demo.md, tasks/T5-33-live-demo.md, tasks/notes/T5-33.md]
 reads: [curio_robot/pipeline.py, curio_robot/resolver.py, curio_robot/sim/world.py, curio_robot/sim/scenarios.py, curio_robot/sim/shots.py, curio_robot/sim/ab.py, product/pitch-strategy.md, docs/booth-script.md, tasks/notes/T5-32.md, tasks/T5-31-libero-dropin.md]
 accept: uv run pytest -q tests/test_t5_33_demo.py
 ---

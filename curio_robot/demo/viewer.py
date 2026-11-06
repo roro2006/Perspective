@@ -5,11 +5,13 @@
 The main view is the live SO-101 scene. Two insets show what the cameras see right now: the
 person's head camera and the robot's camera, rings on what each detected, a thick magenta ring
 on Curio's choice. On the table, a magenta disc marks Curio's target and a green disc the
-ground truth for the words. Requests are typed in the terminal that started it.
+ground truth for the words. Requests are spoken ("Curio, ...", demo/voice.py) or typed in
+the terminal that started it. A seated person sits across the table and can walk round it.
 
 Same decision code as the browser console (`session.decide`: `pipeline.step` on fresh renders,
-scored against the simulator's ground truth). The arm moves by position-only IK steps toward
-the chosen block: scripted motion, not a learned policy, and the overlay says so.
+scored against the simulator's ground truth). The arm then picks the chosen block up and sets
+it down in front of the person (demo/handover.py): scripted motion, not a learned policy, and
+the overlay says so. Each request starts from the scene's own layout.
 
 All world changes happen on this thread under the viewer's lock; the viewer only draws."""
 
@@ -28,11 +30,10 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from curio_robot.demo import voice
+from curio_robot.demo.handover import HandOver
 from curio_robot.demo.session import (
-    ARRIVE,
     MAX_TEXT,
     PANE,
-    SPEED,
     Scene,
     decide,
     draw_camera,
@@ -97,7 +98,7 @@ class ViewerDemo:
         self.scene: Scene | None = None
         self.curio = True
         self.last_text = ""
-        self.goal: np.ndarray | None = None
+        self.motion: HandOver | None = None  # the pick and hand-over in progress
         self.result: dict | None = None
         self.decision = None
         self.pending: list[tuple[str, bool]] = []  # queued (text, curio) runs
@@ -123,7 +124,7 @@ class ViewerDemo:
             self.world.home()
             sc = SCENARIOS[kind](self.world, np.random.default_rng(seed))
         self.scene = Scene(kind, seed, sc.request, sc.expected_xy, sc.human_eye, sc.human_look)
-        self.goal = self.result = self.decision = self.walk_to = None
+        self.motion = self.result = self.decision = self.walk_to = None
         self.pending, self.compare = [], {}
         self.status = "ready"
         self._full = True
@@ -134,8 +135,7 @@ class ViewerDemo:
     def run(self, text: str, curio: bool) -> None:
         text = text.strip()[:MAX_TEXT] or self.scene.request
         self.last_text, self.curio = text, curio
-        with self.v.lock():
-            self.world.home()
+        self._restore_layout()
         d = decide(self.world, self.scene, text, curio)
         self.decision, self.result = d, d.result
         r = d.result
@@ -147,8 +147,9 @@ class ViewerDemo:
               f"  result   {VERDICT[r['verdict']]}   "
               f"detect {r['timings_ms']['detect']} / fuse {r['timings_ms']['fuse']} / "
               f"resolve {r['timings_ms']['resolve']} ms", flush=True)
-        self.goal = d.chosen
-        self.status = "moving"
+        if d.chosen is not None:
+            self.motion = HandOver(self.world, d.chosen, self.scene.eye, self.scene.look)
+        self.status = "reaching"
         self.t_move = time.perf_counter()
         self._full = True
         color = r["parsed"]["color"]
@@ -158,6 +159,17 @@ class ViewerDemo:
             self._finish("nothing to reach")
         else:
             self.say(f"Got it, {it}." if curio else f"Robot view only. {it.capitalize()}.")
+
+    def _restore_layout(self) -> None:
+        """Every request starts from the scene's own layout, with the person where they are,
+        so a block handed over last time is back on the table and off and on see the same."""
+        seat = seat_angle(self.scene)
+        with self.v.lock():
+            self.world.home()
+            sc = SCENARIOS[self.scene.kind](self.world, np.random.default_rng(self.scene.seed))
+            base = Scene(self.scene.kind, self.scene.seed, sc.request, sc.expected_xy,
+                         sc.human_eye, sc.human_look)
+            self.scene = seat_person(self.world, base, seat)
 
     def start_compare(self) -> None:
         text = self.last_text or self.scene.request
@@ -169,20 +181,16 @@ class ViewerDemo:
     def tick(self, dt: float) -> None:
         if self.walk_to is not None:
             self._walk(dt)
-        if self.goal is not None:
-            here = np.asarray(self.world.gripper_position(), float)
-            delta = self.goal - here
-            dist = float(np.linalg.norm(delta))
-            if dist < ARRIVE:
-                self._finish("arrived")
-            else:
-                step_m = SPEED * dt
-                with self.v.lock():
-                    self.world.move_gripper_to(self.goal if dist <= step_m
-                                               else here + delta / dist * step_m)
-                if time.perf_counter() - self.t_move > 15:
-                    self._finish("unreachable")
-        if self.goal is None and self.pending and time.perf_counter() >= self.pause_until:
+        if self.motion is not None:
+            with self.v.lock():
+                event = self.motion.step(dt)
+            self.status = self.motion.label
+            if event == "release":
+                self.say("Here you go.")
+                self._full = True  # the person's view of the hand-over
+            if self.motion.done:
+                self._finish(self.motion.result)
+        if self.motion is None and self.pending and time.perf_counter() >= self.pause_until:
             text, curio = self.pending.pop(0)
             self.pause_until = 0.0
             self.run(text, curio)
@@ -213,7 +221,7 @@ class ViewerDemo:
             self.world.home()
 
     def _finish(self, status: str) -> None:
-        self.goal = None
+        self.motion = None
         self.status = status
         if self.result is not None:
             self.compare[self.result["curio"]] = self.result
@@ -240,7 +248,7 @@ class ViewerDemo:
         elif self.walk_to is not None and now >= self._next_inset:
             self._next_inset = now + INSET_PERIOD
             self._insets(head=True, robot=False)
-        elif self.goal is not None and now >= self._next_inset:
+        elif self.motion is not None and now >= self._next_inset:
             self._next_inset = now + INSET_PERIOD
             self._insets(head=False)
         vp = self.v.viewport
@@ -295,7 +303,7 @@ class ViewerDemo:
                  f'{r["target_id"] or "none"}  ({r["reason"]})' if r else "-",
                  r["oracle"]["why"] if r else "-",
                  VERDICT[r["verdict"]] if r else "-",
-                 f"{self.status}  (scripted IK, not a learned policy)"]
+                 f"{self.status}  (scripted pick and hand-over, not a learned policy)"]
         texts = [(big, int(mujoco.mjtGridPos.mjGRID_TOPLEFT), "\n".join(left), "\n".join(right))]
         if len(self.compare) == 2:
             off, on = self.compare[False], self.compare[True]
@@ -316,7 +324,7 @@ class ViewerDemo:
         """Handle one terminal line; False to quit."""
         words = line.strip().split()
         cmd = words[0].lower() if words else ""
-        busy = self.goal is not None or bool(self.pending) or self.walk_to is not None
+        busy = self.motion is not None or bool(self.pending) or self.walk_to is not None
         if cmd in ("q", "quit", "exit"):
             return False
         if cmd in ("h", "help", "?"):
