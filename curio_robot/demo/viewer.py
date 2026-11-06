@@ -34,6 +34,9 @@ from curio_robot.demo.session import (
     Scene,
     decide,
     draw_camera,
+    seat_angle,
+    seat_name,
+    seat_person,
 )
 from curio_robot.sim.scenarios import SCENARIOS
 from curio_robot.sim.shots import _font
@@ -45,6 +48,8 @@ INSET_PERIOD = 0.5  # robot-inset refresh while the arm moves; each render costs
 LOOP_HZ = 30
 VIEWER_SHADOW = 2048
 PAUSE_S = 1.5  # between the two halves of a comparison
+WALK_DEG_S = 60.0  # how fast the person walks around the table
+WALK_STEP = 45.0  # `walk` with no angle
 SHOWCASE = (("perspective", 0), ("occlusion", 1), ("perspective", 1), ("cluttered", 2))
 
 MAGENTA = (0.93, 0.28, 0.6, 0.75)
@@ -58,6 +63,9 @@ HELP = """Type a request and press Enter, e.g.  Hand me the red one on my left
   c               compare: the same words with Curio off, then on
   n               next showcase scene
   scene K S       load scene kind K (perspective, occlusion, cluttered) with seed S
+  seat D          walk the person to D degrees around the table: 0 across from the
+                  robot, 90 / -90 the ends, 180 beside the robot
+  walk [D]        walk D degrees further round (default 45)
   r               reset the scene        h  this help        q  quit"""
 
 
@@ -96,8 +104,10 @@ class ViewerDemo:
         self._full = True  # re-render both insets on the next frame
         self._next_inset = 0.0
         self._head: Image.Image | None = None
+        self._robot: Image.Image | None = None
         self._texts_shown: list | None = None
         self.compare: dict[bool, dict] = {}
+        self.walk_to: float | None = None  # seat angle the person is walking to
 
     # ---- scene ------------------------------------------------------------------------------
 
@@ -106,7 +116,7 @@ class ViewerDemo:
             self.world.home()
             sc = SCENARIOS[kind](self.world, np.random.default_rng(seed))
         self.scene = Scene(kind, seed, sc.request, sc.expected_xy, sc.human_eye, sc.human_look)
-        self.goal = self.result = self.decision = None
+        self.goal = self.result = self.decision = self.walk_to = None
         self.pending, self.compare = [], {}
         self.status = "ready"
         self._full = True
@@ -145,6 +155,8 @@ class ViewerDemo:
     # ---- per frame --------------------------------------------------------------------------
 
     def tick(self, dt: float) -> None:
+        if self.walk_to is not None:
+            self._walk(dt)
         if self.goal is not None:
             here = np.asarray(self.world.gripper_position(), float)
             delta = self.goal - here
@@ -162,6 +174,31 @@ class ViewerDemo:
             text, curio = self.pending.pop(0)
             self.pause_until = 0.0
             self.run(text, curio)
+
+    def _walk(self, dt: float) -> None:
+        here = seat_angle(self.scene)
+        diff = (self.walk_to - here + 180.0) % 360.0 - 180.0  # the short way round
+        stride = WALK_DEG_S * dt
+        done = abs(diff) <= stride
+        with self.v.lock():
+            self.scene = seat_person(self.world, self.scene,
+                                     self.walk_to if done else here + np.sign(diff) * stride)
+        if done:
+            self.walk_to = None
+            self.status = "ready"
+            self._full = True
+            deg = seat_angle(self.scene)
+            print(f"\nPerson now at {deg:+.0f} degrees, {seat_name(deg)}. "
+                  "Same words, new seat: press Enter.", flush=True)
+
+    def start_walk(self, deg: float) -> None:
+        """The answer depends on where the person sits, so the last one no longer applies."""
+        self.walk_to = (deg + 180.0) % 360.0 - 180.0
+        self.decision = self.result = None
+        self.compare = {}
+        self.status = "person walking"
+        with self.v.lock():
+            self.world.home()
 
     def _finish(self, status: str) -> None:
         self.goal = None
@@ -188,12 +225,15 @@ class ViewerDemo:
             self._full = False
             self._next_inset = now + INSET_PERIOD
             self._insets(head=True)
+        elif self.walk_to is not None and now >= self._next_inset:
+            self._next_inset = now + INSET_PERIOD
+            self._insets(head=True, robot=False)
         elif self.goal is not None and now >= self._next_inset:
             self._next_inset = now + INSET_PERIOD
             self._insets(head=False)
         self._texts()
 
-    def _insets(self, head: bool) -> None:
+    def _insets(self, head: bool, robot: bool = True) -> None:
         d = self.decision
         om = d.object_map if d is not None else None
         cid = d.chosen_id if d is not None else None
@@ -202,15 +242,18 @@ class ViewerDemo:
             img = draw_camera(self.world.render_camera(HUMAN_CAM), om, cid, used)
             _label(img, "HUMAN VIEW  head camera", (80, 200, 235), "" if used else "NOT USED")
             self._head = img
-        head = self._head
-        robot = draw_camera(self.world.render_camera(ROBOT_CAM), om, cid, True)
-        _label(robot, "ROBOT VIEW  its camera", (255, 170, 60))
+        head_img = self._head
+        if robot or self._robot is None:
+            img = draw_camera(self.world.render_camera(ROBOT_CAM), om, cid, True)
+            _label(img, "ROBOT VIEW  its camera", (255, 170, 60))
+            self._robot = img
+        robot_img = self._robot
         vp = self.v.viewport
         if vp is None:
             return
         w, h = INSET
         imgs = []
-        for i, img in enumerate((head, robot)):
+        for i, img in enumerate((head_img, robot_img)):
             rect = mujoco.MjrRect(vp.width - w - 12, vp.height - (h + 12) * (i + 1), w, h)
             imgs.append((rect, np.ascontiguousarray(np.asarray(img.resize(INSET)))))
         self.v.set_images(imgs)
@@ -219,9 +262,12 @@ class ViewerDemo:
         big = int(mujoco.mjtFontScale.mjFONTSCALE_150)
         mode = "CURIO ON   robot + your view" if self.curio else "CURIO OFF   robot's view only"
         r = self.result
-        left = ["Mode", "Scene", "Request", "Target", "Truth", "Result", "Arm"]
+        seat = seat_angle(self.scene) if self.scene else 0.0
+        left = ["Mode", "Scene", "Person", "Request", "Target", "Truth", "Result", "Arm"]
         right = [mode,
                  f"{self.scene.kind} {self.scene.seed}" if self.scene else "-",
+                 (f"walking to {self.walk_to:+.0f} deg" if self.walk_to is not None  # fixed
+                  else f"seat {seat:+.0f} deg, {seat_name(seat)}"),  # text while moving
                  f'"{r["text"]}"' if r else f'"{self.scene.request}" (press Enter)',
                  f'{r["target_id"] or "none"}  ({r["reason"]})' if r else "-",
                  r["oracle"]["why"] if r else "-",
@@ -247,7 +293,7 @@ class ViewerDemo:
         """Handle one terminal line; False to quit."""
         words = line.strip().split()
         cmd = words[0].lower() if words else ""
-        busy = self.goal is not None or bool(self.pending)
+        busy = self.goal is not None or bool(self.pending) or self.walk_to is not None
         if cmd in ("q", "quit", "exit"):
             return False
         if cmd in ("h", "help", "?"):
@@ -264,6 +310,17 @@ class ViewerDemo:
             self.load(*SHOWCASE[self.showcase_i])
         elif cmd == "r":
             self.load(self.scene.kind, self.scene.seed)
+        elif cmd in ("seat", "walk"):
+            try:
+                deg = float(words[1]) if len(words) > 1 else WALK_STEP
+            except ValueError:
+                print("usage: seat DEGREES  |  walk [DEGREES]", flush=True)
+                return True
+            if cmd == "seat" and len(words) < 2:
+                print("usage: seat DEGREES  (0 across, 90 / -90 the ends, 180 beside the robot)",
+                      flush=True)
+                return True
+            self.start_walk(deg if cmd == "seat" else seat_angle(self.scene) + deg)
         elif cmd == "scene":
             if len(words) != 3 or words[1] not in SCENARIOS or not words[2].isdigit():
                 print("usage: scene perspective|occlusion|cluttered SEED", flush=True)
@@ -319,7 +376,7 @@ def main() -> None:
                     pass
                 if not v.is_running():
                     break
-                demo.tick(min(now - last, 0.1))
+                demo.tick(min(now - last, 0.25))
                 last = now
                 demo.draw(now)
                 v.sync()

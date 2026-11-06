@@ -38,7 +38,7 @@ from curio_robot.resolver import parse_request
 from curio_robot.sim import ab
 from curio_robot.sim.ab import SUCCESS_RADIUS
 from curio_robot.sim.scenarios import SCENARIOS
-from curio_robot.sim.world import ROBOT_CAM_LOOK, ROBOT_CAM_POS, SimWorld
+from curio_robot.sim.world import ROBOT_CAM_LOOK, ROBOT_CAM_POS, TABLE_CENTER, SimWorld
 from curio_robot.types import HUMAN_CAM, ROBOT_CAM, CameraFrame, ObjectMap
 
 PANE = (480, 360)
@@ -170,6 +170,32 @@ def draw_twin(frame: CameraFrame, chosen: np.ndarray | None,
         if uv:
             _ring(d, uv, 15, CHOSEN, 4)
     return img
+
+
+# ---- where the person sits ------------------------------------------------------------------
+
+
+def seat_angle(scene: Scene) -> float:
+    """The person's seat in degrees around the table centre: 0 straight across from the robot,
+    +90 at the robot's left-hand end, +-180 beside the robot."""
+    d = scene.eye[:2] - TABLE_CENTER
+    return float(np.degrees(np.arctan2(d[1], d[0])))
+
+
+def seat_name(deg: float) -> str:
+    a = abs(deg)
+    return "across from the robot" if a <= 60 else "at the table's end" if a < 120 else \
+        "beside the robot"
+
+
+def seat_person(world: SimWorld, scene: Scene, deg: float) -> Scene:
+    """Move the person (head model and head camera) to `deg` on the same circle and height,
+    still looking where they looked. Ground truth follows, since it reads the scene's eye."""
+    d = scene.eye[:2] - TABLE_CENTER
+    r, t = float(np.linalg.norm(d)), np.radians(deg)
+    eye = np.array([*(TABLE_CENTER + r * np.array([np.cos(t), np.sin(t)])), scene.eye[2]])
+    world.set_human(eye, scene.look)
+    return Scene(scene.kind, scene.seed, scene.request, scene.expected_xy, eye, scene.look)
 
 
 # ---- one decision (shared by the browser engine and the MuJoCo viewer) -----------------------

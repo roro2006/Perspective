@@ -159,3 +159,19 @@ def test_dropins_read_the_board():
     rows = {d["card"]: d for d in status.dropins()}
     assert rows["T5-32"]["status"] == "done" and "FAIL" in rows["T5-32"]["result"]
     assert "not run" in rows["T5-31"]["result"]
+
+
+def test_moving_the_person_moves_their_left():
+    from curio_robot.demo.session import Scene, decide, seat_angle, seat_person
+
+    with SimWorld(*PANE) as w:
+        sc = SCENARIOS["perspective"](w, np.random.default_rng(0))
+        scene = Scene("perspective", 0, sc.request, sc.expected_xy, sc.human_eye, sc.human_look)
+        across = decide(w, scene, sc.request, True).result
+        beside = seat_person(w, scene, 180.0)
+        assert abs(abs(seat_angle(beside)) - 180.0) < 1e-6
+        on = decide(w, beside, sc.request, True).result
+        off = decide(w, beside, sc.request, False).result
+    assert across["verdict"] == "correct" and on["verdict"] == "correct"
+    assert on["target_id"] != across["target_id"]  # same words, other seat, other block
+    assert off["verdict"] == "correct"  # beside the robot, their left is its left

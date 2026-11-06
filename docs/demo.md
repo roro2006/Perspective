@@ -35,7 +35,7 @@ Two front ends run the same decision code (`session.decide`):
 | Inset below it | **Robot view**: the robot's own camera. |
 | Rings in the insets | Orange: the robot saw it. Blue: the person saw it. Thick magenta: Curio's choice. |
 | Discs on the table | Magenta: Curio's target. Green: the ground truth for your words. |
-| Top-left text | Mode, scene, request, target and why, truth, result, arm status. |
+| Top-left text | Mode, scene, where the person is seated, request, target and why, truth, result, arm status. |
 | Bottom-left text | Off vs on results, after a comparison. |
 
 ## 3. The 60-second script
@@ -48,9 +48,12 @@ Commands go in the terminal. **What to say is in italics.**
 | 1 | (nothing) | *"The person sits across the table. Two identical red blocks. They say: hand me the red one on my left."* |
 | 2 | `off` then Enter | *"Robot camera only. It reads 'left' as its own left..."* The arm goes to the wrong block. Result: **WRONG** (magenta disc away from the green one). |
 | 3 | `on` then Enter | *"Now Curio adds the person's view, so 'my left' means their left."* Result: **CORRECT**, magenta on green. |
-| 4 | `n` twice | Loads `occlusion 1`. *"The blue block is behind a box. The robot can't see it, but the person can."* |
-| 5 | `c` | Runs off, then on. Off: **NOT FOUND**. On: **CORRECT**. *"Curio puts what the person sees into the robot's map."* |
-| 6 | (offer the keyboard) | *"Try your own."* Good ones on `perspective 0` (`scene perspective 0`): "the green one on my right", "the red one closest to me", "the green one on your right". |
+| 4 | `seat 180` | The person walks round to stand beside the robot. *"Now I'm standing next to the robot. Same words."* |
+| 5 | Enter | Curio picks the **other** red block: CORRECT. *"My left changed when I moved, and Curio followed me."* |
+| 6 | `c` | Off and on are both CORRECT here. *"Standing beside it, my left is the robot's left, so even the robot alone gets it. Curio is right from every seat; the robot alone is right only from its own."* Then `seat 0` to go back across. |
+| 7 | `n` twice | Loads `occlusion 1`. *"The blue block is behind a box. The robot can't see it, but the person can."* |
+| 8 | `c` | Runs off, then on. Off: **NOT FOUND**. On: **CORRECT**. *"Curio puts what the person sees into the robot's map."* |
+| 9 | (offer the keyboard) | *"Try your own."* Good ones on `perspective 0` (`scene perspective 0`): "the green one on my right", "the red one closest to me", "the green one on your right". |
 
 The last one is a useful closer: "your right" means the robot's right, and Curio gets it right
 with or without the head camera. It isn't just flipping left and right; it reads whose
@@ -68,12 +71,18 @@ Short version, if someone is walking past: `scene perspective 0`, then `c`.
 | `on` / `off` | Curio on (robot + head camera) or off (robot camera only) |
 | `c` | compare: the same words with Curio off, then on |
 | `n` | next showcase scene: perspective 0, occlusion 1, perspective 1, cluttered 2 |
+| `seat D` | walk the person to D degrees round the table: `0` across from the robot, `90` / `-90` the ends, `180` beside the robot |
+| `walk` / `walk D` | walk 45 (or D) degrees further round |
 | `scene K S` | load scene K (`perspective`, `occlusion`, `cluttered`) with seed S |
 | `r` | reset the current scene |
 | `h` | help |
 | `q` | quit (or close the window) |
 
 Each showcase scene was checked: Curio off is wrong (or finds nothing) and Curio on is correct.
+Moving the person was checked on `perspective 0` in 20-degree steps all the way round: Curio
+on was correct at every seat. Curio off was correct only from about 80 degrees round to the
+robot's side, where the person's left matches the robot's.
+
 The understood words are a colour plus left/right, nearest/closest or farthest/furthest, with
 "my" (yours) or "your" (the robot's). Anything else still gets an answer, and Truth shows
 "unknown".
