@@ -15,12 +15,33 @@ import mujoco
 import numpy as np
 
 
+def _main_checkout(root: Path) -> Path | None:
+    """In a git worktree, `.git` is a file "gitdir: <main>/.git/worktrees/<name>"; the
+    downloads (gitignored) live only in the main checkout."""
+    git = root / ".git"
+    if not git.is_file():
+        return None
+    line = git.read_text(encoding="utf-8").strip()
+    if not line.startswith("gitdir:"):
+        return None
+    gitdir = Path(line.removeprefix("gitdir:").strip())
+    if not gitdir.is_absolute():
+        gitdir = (root / gitdir).resolve()
+    return gitdir.parents[2] if gitdir.parent.name == "worktrees" else None
+
+
 def third_party() -> Path:
     """Where the downloads live: $CURIO_THIRD_PARTY, else this checkout's third_party/, else
-    the GPU box's main checkout (T5-20's machine). The first that has the Go2 model wins."""
+    the main checkout's when this is a worktree, else the GPU box's main checkout (T5-20's
+    machine). The first that has the Go2 model wins."""
     env = os.environ.get("CURIO_THIRD_PARTY")
-    here = Path(__file__).resolve().parents[2] / "third_party"
-    for tp in ([Path(env)] if env else []) + [here, Path("C:/Users/Rohan/dev/Perspective/third_party")]:
+    root = Path(__file__).resolve().parents[2]
+    here = root / "third_party"
+    main = _main_checkout(root)
+    tries = [Path(env)] if env else []
+    tries += [here] + ([main / "third_party"] if main else [])
+    tries.append(Path("C:/Users/Rohan/dev/Perspective/third_party"))
+    for tp in tries:
         if (tp / "mujoco_menagerie/unitree_go2/go2.xml").exists():
             return tp
     return here
