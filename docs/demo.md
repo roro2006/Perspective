@@ -5,7 +5,8 @@ face, your left is the robot's right, and most robots get that backwards. This d
 live in simulation, with Curio switched off and then on.
 
 Two front ends run the same decision code (`session.decide`):
-- **MuJoCo viewer** (main): one native window. You type in the terminal.
+- **MuJoCo viewer** (main): one native window. You **talk to it** ("Curio, hand me the red one
+  on my left") and it answers out loud. The terminal still works as a backup.
 - **Browser console** (backup): the same thing as a web page, plus a measured A/B and replays.
 
 ---
@@ -18,13 +19,18 @@ Two front ends run the same decision code (`session.decide`):
    cd C:\Users\Harry\Desktop\MoreProjects\Perspective-t5-33
    uv run python -m curio_robot.demo.viewer
    ```
-   A MuJoCo window opens on scene `perspective 0`. Keep the terminal visible next to it
-   (window left, terminal right, or terminal at the bottom), because that's where you type.
-3. Press Enter once in the terminal, wait for the arm to arrive, then type `r` to reset.
-   That warms everything up.
-4. Optional: turn on the RTX 4070 in Device Manager (Display adapters) for smoother rendering.
+   A MuJoCo window opens on scene `perspective 0`, and the microphone starts listening. The
+   top-left text says *Voice: listening*. Keep the terminal visible as a backup.
+   (`--no-voice` turns the microphone off.)
+3. Say *"Curio, hand me the red one on my left"*, wait for the arm to arrive, then say
+   *"Curio, reset"*. That warms everything up and checks the mic. If it doesn't react, see
+   section 7.
+4. Use the laptop's speakers at a moderate volume, or headphones. Curio ignores what it hears
+   while it's talking, but loud speakers next to the mic can still confuse it.
+5. Optional: turn on the RTX 4070 in Device Manager (Display adapters) for smoother rendering.
    The demo runs without it.
-5. No internet, GPU or model server is needed. Everything is local.
+6. No internet, GPU or model server is needed. Everything is local, including the speech
+   recognition (Windows' built-in, offline recognizer).
 
 ## 2. What's on screen
 
@@ -40,19 +46,20 @@ Two front ends run the same decision code (`session.decide`):
 
 ## 3. The 60-second script
 
-Commands go in the terminal. **What to say is in italics.**
+Every step can be **spoken** (the "Say to Curio" column) or typed in the terminal. Your
+narration to the audience is in italics.
 
-| Step | Type | Say |
+| Step | Say to Curio (or type) | Narration |
 |---|---|---|
 | 0 | (nothing) | *"This is a simulation. The arm motion is scripted. What's live is Curio working out which block you mean, from your side, on whatever you type."* |
 | 1 | (nothing) | *"The person sits across the table. Two identical red blocks. They say: hand me the red one on my left."* |
-| 2 | `off` then Enter | *"Robot camera only. It reads 'left' as its own left..."* The arm goes to the wrong block. Result: **WRONG** (magenta disc away from the green one). |
-| 3 | `on` then Enter | *"Now Curio adds the person's view, so 'my left' means their left."* Result: **CORRECT**, magenta on green. |
-| 4 | `seat 180` | The person walks round to stand beside the robot. *"Now I'm standing next to the robot. Same words."* |
-| 5 | Enter | Curio picks the **other** red block: CORRECT. *"My left changed when I moved, and Curio followed me."* |
-| 6 | `c` | Off and on are both CORRECT here. *"Standing beside it, my left is the robot's left, so even the robot alone gets it. Curio is right from every seat; the robot alone is right only from its own."* Then `seat 0` to go back across. |
-| 7 | `n` twice | Loads `occlusion 1`. *"The blue block is behind a box. The robot can't see it, but the person can."* |
-| 8 | `c` | Runs off, then on. Off: **NOT FOUND**. On: **CORRECT**. *"Curio puts what the person sees into the robot's map."* |
+| 2 | "Curio, off", then "Curio, hand me the red one on my left" (`off`, Enter) | *"Robot camera only. It reads 'left' as its own left..."* The arm goes to the wrong block. Result: **WRONG** (magenta disc away from the green one). |
+| 3 | "Curio, on", then the same sentence (`on`, Enter) | *"Now Curio adds the person's view, so 'my left' means their left."* Result: **CORRECT**, magenta on green. |
+| 4 | "Curio, walk around" (`seat 180`) | The person walks round to stand beside the robot. *"Now I'm standing next to the robot. Same words."* |
+| 5 | "Curio, hand me the red one on my left" (Enter) | Curio picks the **other** red block: CORRECT. *"My left changed when I moved, and Curio followed me."* |
+| 6 | "Curio, compare" (`c`) | Off and on are both CORRECT here. *"Standing beside it, my left is the robot's left, so even the robot alone gets it. Curio is right from every seat; the robot alone is right only from its own."* Then "Curio, go back" (`seat 0`). |
+| 7 | "Curio, next scene" twice (`n` twice) | Loads `occlusion 1`. *"The blue block is behind a box. The robot can't see it, but the person can."* |
+| 8 | "Curio, compare" (`c`) | Runs off, then on. Off: **NOT FOUND**. On: **CORRECT**. *"Curio puts what the person sees into the robot's map."* |
 | 9 | (offer the keyboard) | *"Try your own."* Good ones on `perspective 0` (`scene perspective 0`): "the green one on my right", "the red one closest to me", "the green one on your right". |
 
 The last one is a useful closer: "your right" means the robot's right, and Curio gets it right
@@ -62,7 +69,28 @@ frame the words are in.
 Short version, if someone is walking past: `scene perspective 0`, then `c`.
 *"Same words, same scene. Off, it's wrong. On, it's right."*
 
-## 4. Terminal commands
+## 4. Voice and terminal commands
+
+Start every spoken command with **"Curio"**. It only listens for these sentences, which is what
+makes it reliable in a noisy room:
+
+| Say "Curio, ..." | Same as typing |
+|---|---|
+| "hand me / give me / pass me / pick up / get / grab / go to the *red / blue / green / yellow* *one / block* ..." optionally followed by "on my left / on my right / on your left / on your right / closest to me / furthest from me / closest to you / furthest from you" | the sentence itself |
+| "on", "turn on" / "off", "turn off" | `on` / `off` |
+| "compare", "show the difference" | `c` |
+| "next scene" | `n` |
+| "reset" | `r` |
+| "walk around", "stand beside the robot", "go to the other side" | `seat 180` |
+| "go back", "sit across" | `seat 0` |
+| "go to the end" / "go to the other end" | `seat 90` / `seat -90` |
+| "walk", "keep walking" | `walk` |
+
+Curio answers out loud ("Got it, the red one."; "Robot view only. The red one."; "I can't see a
+blue one."). If it heard you but wasn't sure, the Voice line says *not sure I heard ...* and
+nothing happens: just say it again.
+
+Terminal commands:
 
 | Type | Does |
 |---|---|
@@ -96,7 +124,7 @@ Say this plainly if anyone asks. Don't claim more.
 | Rendering the head camera and the robot camera from the current scene | The arm motion: inverse kinematics to the chosen block, no grasp, **not a learned policy** |
 | Detecting blocks, fusing both views into one map, working out whose left | Scene layouts: a seeded generator, random but repeatable |
 | Choosing the block from whatever you type | The person: a simulated camera, not a real person or camera |
-| Checking the choice against the simulator's ground truth | The language reading: keyword rules, not the trained model (which isn't on this laptop) |
+| Checking the choice against the simulator's ground truth | The language reading: keyword rules, not the trained model (which isn't on this laptop). Speech is Windows' offline recognizer, listening for a fixed list of sentences |
 
 ## 6. Questions you'll get
 
@@ -118,11 +146,14 @@ Don't debug on stage. Spend five seconds at most, then step down this list.
 
 1. **Wrong result you didn't expect:** type `r`, then run again. Or `scene perspective 0`
    and `c`, which is known good.
-2. **Typing does nothing:** click the terminal first. Keyboard focus is probably on the MuJoCo
+2. **Voice doesn't react:** check the Voice line. If it says *not sure I heard*, speak closer
+   and say "Curio" clearly. If it says *voice stopped*, or the mic is wrong, check the Windows
+   default microphone (Settings > System > Sound > Input), or just type in the terminal.
+3. **Typing does nothing:** click the terminal first. Keyboard focus is probably on the MuJoCo
    window.
-3. **Window frozen or closed:** `q`, then start it again (step 1.2). It opens in a few seconds.
-4. **Viewer won't start at all:** run the browser console instead (below).
-5. **No laptop:** describe the beat with a recording from rehearsal, and say it's a replay.
+4. **Window frozen or closed:** `q`, then start it again (step 1.2). It opens in a few seconds.
+5. **Viewer won't start at all:** run the browser console instead (below).
+6. **No laptop:** describe the beat with a recording from rehearsal, and say it's a replay.
 
 ## 8. Backup: the browser console
 

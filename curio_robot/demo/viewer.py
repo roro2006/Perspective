@@ -20,12 +20,14 @@ import queue
 import sys
 import threading
 import time
+from collections.abc import Callable
 
 import mujoco
 import mujoco.viewer
 import numpy as np
 from PIL import Image, ImageDraw
 
+from curio_robot.demo import voice
 from curio_robot.demo.session import (
     ARRIVE,
     MAX_TEXT,
@@ -107,6 +109,8 @@ class ViewerDemo:
         self._robot: Image.Image | None = None
         self._texts_shown: list | None = None
         self.compare: dict[bool, dict] = {}
+        self.say: Callable[[str], None] = lambda text: None  # voice reply, if voice is on
+        self.voice_line = "off (terminal only)"
         self.walk_to: float | None = None  # seat angle the person is walking to
 
     # ---- scene ------------------------------------------------------------------------------
@@ -144,8 +148,13 @@ class ViewerDemo:
         self.status = "moving"
         self.t_move = time.perf_counter()
         self._full = True
+        color = r["parsed"]["color"]
+        it = f"the {color} one" if color else "that one"
         if d.chosen is None:
+            self.say(f"I can't see {'a ' + color + ' one' if color else 'that'}.")
             self._finish("nothing to reach")
+        else:
+            self.say(f"Got it, {it}." if curio else f"Robot view only. {it.capitalize()}.")
 
     def start_compare(self) -> None:
         text = self.last_text or self.scene.request
@@ -263,8 +272,10 @@ class ViewerDemo:
         mode = "CURIO ON   robot + your view" if self.curio else "CURIO OFF   robot's view only"
         r = self.result
         seat = seat_angle(self.scene) if self.scene else 0.0
-        left = ["Mode", "Scene", "Person", "Request", "Target", "Truth", "Result", "Arm"]
+        left = ["Mode", "Voice", "Scene", "Person", "Request", "Target", "Truth", "Result",
+                "Arm"]
         right = [mode,
+                 self.voice_line,
                  f"{self.scene.kind} {self.scene.seed}" if self.scene else "-",
                  (f"walking to {self.walk_to:+.0f} deg" if self.walk_to is not None  # fixed
                   else f"seat {seat:+.0f} deg, {seat_name(seat)}"),  # text while moving
@@ -301,8 +312,10 @@ class ViewerDemo:
         elif cmd in ("on", "off"):
             self.curio = cmd == "on"
             print(f"Curio {cmd}", flush=True)
+            self.say(f"Curio {cmd}.")
         elif busy:
             print("busy: the arm is moving; wait for it to finish", flush=True)
+            self.say("One moment.")
         elif cmd == "c":
             self.start_compare()
         elif cmd == "n":
@@ -337,10 +350,35 @@ def _read_stdin(lines: queue.Queue[str | None]) -> None:
     lines.put(None)
 
 
+def _start_voice(demo: ViewerDemo, lines: queue.Queue[str | None]):
+    """Say "Curio, ..." instead of typing. Commands join the terminal's queue."""
+    if not voice.available():
+        demo.voice_line = "unavailable on this system (terminal only)"
+        print("Voice: not available here; use the terminal.", flush=True)
+        return None
+
+    def heard(command: str, text: str, conf: float) -> None:
+        demo.voice_line = f'heard "{text}" ({conf:.2f})'
+        print(f'\nHeard: "{text}" ({conf:.2f})', flush=True)
+        lines.put(command)
+
+    def status(s: str) -> None:
+        demo.voice_line = 'listening: say "Curio, ..."' if s == "listening" else s
+
+    listener = voice.Listener(heard, status)
+    demo.voice_line = "starting the microphone..."
+    listener.start()
+    demo.say = listener.say
+    print('Voice: say "Curio, hand me the red one on my left". The terminal still works.',
+          flush=True)
+    return listener
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="curio_robot.demo.viewer", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scene", default="perspective:0", help="first scene, kind:seed")
+    p.add_argument("--no-voice", action="store_true", help="terminal only, no microphone")
     args = p.parse_args()
     kind, _, seed = args.scene.partition(":")
     if kind not in SCENARIOS:
@@ -352,6 +390,7 @@ def main() -> None:
     # integrated graphics.
     world.model.vis.quality.shadowsize = VIEWER_SHADOW
     lines: queue.Queue[str | None] = queue.Queue()
+    listener = None
     threading.Thread(target=_read_stdin, args=(lines,), daemon=True).start()
     try:
         with mujoco.viewer.launch_passive(world.model, world.data, show_left_ui=False,
@@ -362,6 +401,7 @@ def main() -> None:
             demo = ViewerDemo(v, world)
             demo.load(kind, int(seed or 0))
             print(HELP, flush=True)
+            listener = _start_voice(demo, lines) if not args.no_voice else None
             period = 1.0 / LOOP_HZ
             last = time.perf_counter()
             while v.is_running():
@@ -382,6 +422,8 @@ def main() -> None:
                 v.sync()
                 time.sleep(max(0.0, period - (time.perf_counter() - now)))
     finally:
+        if listener is not None:
+            listener.close()
         world.close()
 
 

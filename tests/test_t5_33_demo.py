@@ -175,3 +175,32 @@ def test_moving_the_person_moves_their_left():
     assert across["verdict"] == "correct" and on["verdict"] == "correct"
     assert on["target_id"] != across["target_id"]  # same words, other seat, other block
     assert off["verdict"] == "correct"  # beside the robot, their left is its left
+
+
+def test_voice_phrases_are_what_the_resolver_reads():
+    from curio_robot.demo import voice
+    from curio_robot.resolver import parse_request
+
+    for p in voice.requests():
+        req = parse_request(p)
+        assert req.color is not None  # every spoken request names a colour
+    assert voice.to_command("curio compare") == "c"
+    assert voice.to_command("curio walk around") == "seat 180"
+    assert voice.to_command("curio hand me the red one on my left") == \
+        "hand me the red one on my left"
+    assert all(p.startswith("curio ") for p in voice.phrases())
+
+
+@pytest.mark.skipif("not __import__('curio_robot.demo.voice').demo.voice.available()")
+def test_voice_round_trip_on_windows(tmp_path):
+    from curio_robot.demo import voice
+
+    wav = tmp_path / "said.wav"
+    voice.synthesize("Curio, give me the blue block closest to me", wav)
+    got = []
+    listener = voice.Listener(lambda c, t, conf: got.append(c), wave_file=wav)
+    listener.start()
+    listener.wait(60)
+    time.sleep(0.3)
+    listener.close()
+    assert got == ["give me the blue block closest to me"]
