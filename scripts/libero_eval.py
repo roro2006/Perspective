@@ -12,9 +12,10 @@ are appended to out/t5_31/*.jsonl and skipped when already there, so a stopped s
 
 P is LeRobot's own `lerobot-eval` on libero_spatial (its default env config, batch size 1,
 5 episodes per task, seed 1000), so its init states are 0-4 of every task. The only overrides
-are the two this machine needs: SmolVLA's load_vlm_weights=false (the checkpoint holds the
-backbone; true would fetch SmolVLM2's weights again) and pi0.5's compile_model=false
-(torch.compile has no Triton backend on Windows ROCm). The Curio rollouts parse the same
+are SmolVLA's camera rename map (its cameras are camera1/camera2; LeRobot's LIBERO docs pass the
+same --rename_map) and two this machine needs: SmolVLA's load_vlm_weights=false (the
+checkpoint holds the backbone; true would fetch SmolVLM2's weights again) and pi0.5's
+compile_model=false (torch.compile has no Triton backend on Windows ROCm). The Curio rollouts parse the same
 arguments into the same EvalPipelineConfig and call lerobot_eval.rollout on the same envs and
 processors; only the task text and the init state change.
 
@@ -81,7 +82,9 @@ CHECKPOINTS = {  # repo, revision (pinned at download, scripts/libero_setup.md)
     "pi05": ("lerobot/pi05_libero_finetuned_v044", "7152f13e34c6c115d808aea0e5d08aca74eac14b"),
 }
 POLICY_OVERRIDES = {
-    "smolvla": ["--policy.load_vlm_weights=false"],
+    "smolvla": ["--policy.load_vlm_weights=false", "--rename_map=" + json.dumps(
+        {"observation.images.image": "observation.images.camera1",
+         "observation.images.image2": "observation.images.camera2"})],
     "pi05": ["--policy.compile_model=false"],
 }
 
@@ -411,10 +414,13 @@ class LerobotRunner:
         from lerobot.envs.factory import make_env_pre_post_processors
         from lerobot.policies.factory import make_policy, make_pre_post_processors
 
-        @parser.wrap()
-        def _parse(cfg: EvalPipelineConfig) -> EvalPipelineConfig:
+        def _identity(cfg):
             return cfg
 
+        # parser.wrap reads the config class from the annotation, which must be the class
+        # itself (this module's annotations are strings).
+        _identity.__annotations__ = {"cfg": EvalPipelineConfig}
+        _parse = parser.wrap()(_identity)
         argv = sys.argv
         sys.argv = ["lerobot_eval", *eval_args(policy, out_dir)]
         try:
