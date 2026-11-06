@@ -41,8 +41,9 @@ from curio_robot.sim.world import HUMAN_GROUP, SimWorld
 from curio_robot.types import HUMAN_CAM, ROBOT_CAM
 
 INSET = (384, 288)  # insets are drawn at PANE (the detection resolution) and scaled to this
-INSET_PERIOD = 0.25  # seconds between inset refreshes (two CPU renders each)
+INSET_PERIOD = 0.5  # robot-inset refresh while the arm moves; each render costs ~70 ms here
 LOOP_HZ = 30
+VIEWER_SHADOW = 2048
 PAUSE_S = 1.5  # between the two halves of a comparison
 SHOWCASE = (("perspective", 0), ("occlusion", 1), ("perspective", 1), ("cluttered", 2))
 
@@ -92,7 +93,10 @@ class ViewerDemo:
         self.showcase_i = -1
         self.status = "ready"
         self.t_move = 0.0
+        self._full = True  # re-render both insets on the next frame
         self._next_inset = 0.0
+        self._head: Image.Image | None = None
+        self._texts_shown: list | None = None
         self.compare: dict[bool, dict] = {}
 
     # ---- scene ------------------------------------------------------------------------------
@@ -105,7 +109,7 @@ class ViewerDemo:
         self.goal = self.result = self.decision = None
         self.pending, self.compare = [], {}
         self.status = "ready"
-        self._next_inset = 0.0
+        self._full = True
         print(f"\nScene {kind} {seed}. Its request: \"{sc.request}\"", flush=True)
 
     # ---- one run ----------------------------------------------------------------------------
@@ -129,7 +133,7 @@ class ViewerDemo:
         self.goal = d.chosen
         self.status = "moving"
         self.t_move = time.perf_counter()
-        self._next_inset = 0.0
+        self._full = True
         if d.chosen is None:
             self._finish("nothing to reach")
 
@@ -166,7 +170,7 @@ class ViewerDemo:
             self.compare[self.result["curio"]] = self.result
             print(f"  motion   {status} in {time.perf_counter() - self.t_move:.1f} s", flush=True)
         self.pause_until = time.perf_counter() + PAUSE_S if self.pending else 0.0
-        self._next_inset = 0.0
+        self._full = True
 
     # ---- drawing ----------------------------------------------------------------------------
 
@@ -178,19 +182,28 @@ class ViewerDemo:
             _marker(scn, d.oracle, 0.03, GREEN)
         if d is not None and d.chosen is not None:
             _marker(scn, d.chosen[:2], 0.019, MAGENTA)
-        if now >= self._next_inset:
+        # Offscreen renders block this loop, so render only when something changed: both
+        # insets after a load, a decision or an arrival; the robot inset alone while moving.
+        if self._full:
+            self._full = False
             self._next_inset = now + INSET_PERIOD
-            self._insets()
+            self._insets(head=True)
+        elif self.goal is not None and now >= self._next_inset:
+            self._next_inset = now + INSET_PERIOD
+            self._insets(head=False)
         self._texts()
 
-    def _insets(self) -> None:
+    def _insets(self, head: bool) -> None:
         d = self.decision
         om = d.object_map if d is not None else None
         cid = d.chosen_id if d is not None else None
-        head = draw_camera(self.world.render_camera(HUMAN_CAM), om, cid, self.curio or d is None)
+        if head or self._head is None:
+            used = self.curio or d is None
+            img = draw_camera(self.world.render_camera(HUMAN_CAM), om, cid, used)
+            _label(img, "HUMAN VIEW  head camera", (80, 200, 235), "" if used else "NOT USED")
+            self._head = img
+        head = self._head
         robot = draw_camera(self.world.render_camera(ROBOT_CAM), om, cid, True)
-        _label(head, "HUMAN VIEW  head camera", (80, 200, 235),
-               "" if self.curio or d is None else "NOT USED")
         _label(robot, "ROBOT VIEW  its camera", (255, 170, 60))
         vp = self.v.viewport
         if vp is None:
@@ -224,7 +237,9 @@ class ViewerDemo:
         texts.append((int(mujoco.mjtFontScale.mjFONTSCALE_100),
                       int(mujoco.mjtGridPos.mjGRID_BOTTOMRIGHT), "CURIO",
                       "simulation  ·  type in the terminal  ·  h for help"))
-        self.v.set_texts(texts)
+        if texts != self._texts_shown:  # set_texts waits on the render thread (26-97 ms here)
+            self._texts_shown = texts
+            self.v.set_texts(texts)
 
     # ---- commands ---------------------------------------------------------------------------
 
@@ -275,6 +290,10 @@ def main() -> None:
         p.error(f"scene kind must be one of {sorted(SCENARIOS)}")
 
     world = SimWorld(*PANE)  # detection runs at the console's resolution
+    # The viewer builds its own GL context from these settings at launch; the offscreen
+    # renderer above already exists, so detection renders are unchanged. 8192 is costly on
+    # integrated graphics.
+    world.model.vis.quality.shadowsize = VIEWER_SHADOW
     lines: queue.Queue[str | None] = queue.Queue()
     threading.Thread(target=_read_stdin, args=(lines,), daemon=True).start()
     try:
