@@ -1,7 +1,7 @@
 ---
 id: T5-32
 title: Drop-in test on the Go2 dog, where Curio's goal drives a pretrained navigation policy instead of our path follower
-status: todo
+status: done
 agent: claude
 budget: 100000
 depends: [T5-27]
