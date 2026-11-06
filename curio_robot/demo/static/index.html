@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Curio Live Console</title>
+<style>
+:root {
+  --bg: #0d0f12; --panel: #15181d; --panel-2: #1b1f26; --line: #262b33;
+  --text: #e8e8e4; --muted: #8b929c; --faint: #5b626c;
+  --accent: #ec4899; --robot: #ffaa3c; --head: #50c8eb;
+  --ok: #5ac878; --bad: #eb5a50; --warn: #e8b84a;
+  --radius: 10px; --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif; }
+button, input, select { font: inherit; color: inherit; }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+  border-bottom: 1px solid var(--line); }
+.brand { font-weight: 700; letter-spacing: .18em; font-size: 18px; }
+.brand span { color: var(--accent); }
+.sub { color: var(--muted); }
+.spacer { flex: 1; }
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
+  border-radius: 99px; border: 1px solid var(--line); font-size: 12px; font-weight: 600;
+  letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.live { color: var(--ok); } .replay { color: var(--warn); } .down { color: var(--bad); }
+.busy { color: var(--head); }
+
+.pipeline { display: flex; gap: 6px; padding: 10px 20px; border-bottom: 1px solid var(--line);
+  overflow-x: auto; }
+.stage { flex: 1; min-width: 130px; padding: 8px 10px; border-radius: 8px; background: var(--panel);
+  border: 1px solid var(--line); color: var(--muted); font-size: 12px; transition: .2s; }
+.stage b { display: block; color: var(--text); font-size: 13px; }
+.stage.on { border-color: var(--accent); color: var(--text); background: #2a1424; }
+.stage.done { border-color: #2f5a3c; color: var(--text); }
+
+main { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(330px, 1fr); gap: 16px;
+  padding: 16px 20px 28px; }
+@media (max-width: 1000px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+
+.views { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; }
+.pane { position: relative; background: #000; border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden; aspect-ratio: 4 / 3; }
+.pane.big { grid-row: span 2; aspect-ratio: auto; min-height: 0; }
+@media (max-width: 700px) { .views { grid-template-columns: 1fr; } .pane.big { grid-row: auto; aspect-ratio: 4 / 3; } }
+.pane img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pane .label { position: absolute; left: 10px; top: 8px; font-size: 11px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; background: rgba(0,0,0,.55);
+  padding: 3px 8px; border-radius: 6px; }
+.pane .note { position: absolute; left: 10px; bottom: 8px; right: 10px; font-size: 12px;
+  color: var(--muted); background: rgba(0,0,0,.55); padding: 3px 8px; border-radius: 6px; }
+.pane .unused { position: absolute; inset: 0; display: none; align-items: center;
+  justify-content: center; color: var(--muted); font-weight: 600; letter-spacing: .08em; }
+.pane.dim .unused { display: flex; }
+.replay-banner { position: absolute; top: 8px; right: 10px; display: none; background: var(--warn);
+  color: #111; font-weight: 800; letter-spacing: .14em; font-size: 11px; padding: 3px 8px;
+  border-radius: 6px; }
+body.replaying .replay-banner { display: block; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 12px;
+  margin: 8px 2px 0; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid; margin-right: 5px; vertical-align: -1px; }
+
+aside { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; }
+.card h2 { margin: 0 0 10px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.card h2 .spacer { flex: 1; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row + .row { margin-top: 8px; }
+input[type=text], input[type=number], select { background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+input[type=text] { flex: 1; font-size: 16px; }
+input[type=number] { width: 84px; }
+input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 12px; cursor: pointer; white-space: nowrap; }
+button:hover:not(:disabled) { border-color: #3d4450; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.ghost { background: transparent; }
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+  font-weight: 600; }
+.switch input { display: none; }
+.track { width: 40px; height: 22px; border-radius: 99px; background: #3a2020; position: relative;
+  transition: .2s; border: 1px solid var(--line); }
+.track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #ddd; transition: .2s; }
+.switch input:checked + .track { background: #1f4a2c; }
+.switch input:checked + .track::after { left: 20px; }
+
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+dt { color: var(--muted); }
+dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line);
+  font-size: 12px; margin: 0 4px 4px 0; background: var(--panel-2); }
+.chip.target { border-color: var(--accent); }
+.v { font-weight: 700; padding: 2px 9px; border-radius: 6px; font-size: 12px;
+  letter-spacing: .05em; text-transform: uppercase; }
+.v.correct { background: #1d3b27; color: var(--ok); }
+.v.wrong, .v.not_found { background: #3d1e1c; color: var(--bad); }
+.v.unknown { background: #2b2b2b; color: var(--muted); }
+.empty { color: var(--faint); font-size: 13px; }
+
+.compare { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.col { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  font-size: 13px; min-width: 0; }
+.col h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); letter-spacing: .08em;
+  text-transform: uppercase; }
+.col p { margin: 6px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+td.t { overflow-wrap: anywhere; }
+.scroll { max-height: 220px; overflow: auto; }
+.bars { display: grid; gap: 8px; }
+.bar { display: grid; grid-template-columns: 92px 1fr 48px; align-items: center; gap: 8px; font-size: 12px; }
+.bar .track2 { height: 10px; background: var(--panel-2); border-radius: 99px; overflow: hidden;
+  border: 1px solid var(--line); }
+.bar .fill { height: 100%; }
+.bar .fill.on { background: var(--ok); } .bar .fill.off { background: var(--bad); }
+.fine { color: var(--faint); font-size: 12px; margin-top: 8px; }
+.check { display: grid; grid-template-columns: 16px 1fr; gap: 8px; font-size: 13px; padding: 3px 0; }
+.check .st { font-weight: 800; }
+.check .st.y { color: var(--ok); } .check .st.n { color: var(--bad); } .check .st.na { color: var(--faint); }
+.check small { color: var(--muted); display: block; }
+.drop { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.drop:last-child { border-bottom: 0; }
+.drop small { display: block; color: var(--muted); }
+
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #3d1e1c;
+  color: #ffd9d6; border: 1px solid var(--bad); padding: 10px 16px; border-radius: 8px;
+  display: none; max-width: min(92vw, 640px); z-index: 10; }
+.caption { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  background: rgba(21,24,29,.96); border: 1px solid var(--accent); border-radius: 12px;
+  padding: 14px 20px; font-size: 18px; max-width: min(92vw, 760px); display: none; z-index: 9;
+  box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+.caption small { display: block; color: var(--muted); font-size: 13px; margin-top: 4px; }
+.overlay { position: fixed; inset: 0; background: rgba(8,9,11,.92); display: none; z-index: 20;
+  align-items: center; justify-content: center; text-align: center; padding: 24px; }
+.overlay div { max-width: 560px; }
+.overlay h1 { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">CUR<span>I</span>O</div>
+  <div class="sub">Live robotics console · simulation</div>
+  <div class="spacer"></div>
+  <span id="busy" class="badge busy" hidden><span class="dot"></span><span id="busy-t">running</span></span>
+  <span id="mode" class="badge live"><span class="dot"></span><span id="mode-t">live</span></span>
+</header>
+
+<div class="pipeline" id="pipeline">
+  <div class="stage" data-s="head"><b>Human view</b>head camera frame</div>
+  <div class="stage" data-s="req"><b>Request</b>the person's words</div>
+  <div class="stage" data-s="curio"><b>Curio</b>fuse views, whose frame</div>
+  <div class="stage" data-s="goal"><b>Goal</b>one block in the map</div>
+  <div class="stage" data-s="robot"><b>Robot</b>scripted IK motion</div>
+</div>
+
+<main>
+  <section>
+    <div class="views">
+      <div class="pane big" id="pane-twin">
+        <img id="img-twin" alt="Simulator overview of the table and arm">
+        <span class="label">Simulation · SO-101</span>
+        <span class="replay-banner">REPLAY · RECORDED</span>
+        <span class="note">Magenta: Curio's choice. Green: ground truth for these words.</span>
+      </div>
+      <div class="pane" id="pane-head">
+        <img id="img-head" alt="The person's head camera">
+        <span class="label" style="color:var(--head)">Human view · head camera</span>
+        <span class="replay-banner">REPLAY</span>
+        <div class="unused">NOT USED: CURIO OFF</div>
+      </div>
+      <div class="pane" id="pane-robot">
+        <img id="img-robot" alt="The robot's camera">
+        <span class="label" style="color:var(--robot)">Robot view · its camera</span>
+        <span class="replay-banner">REPLAY</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i style="border-color:var(--robot)"></i>seen by the robot</span>
+      <span><i style="border-color:var(--head)"></i>seen by the person</span>
+      <span><i style="border-color:var(--accent)"></i>Curio's target</span>
+      <span><i style="border-color:var(--ok)"></i>ground truth</span>
+    </div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h2>Command <span class="spacer"></span>
+        <button class="ghost" id="b-showcase" title="Guided one-minute run">▶ Showcase</button></h2>
+      <div class="row">
+        <select id="kind" aria-label="Scene"></select>
+        <input id="seed" type="number" min="0" value="0" aria-label="Seed">
+        <button id="b-load">New scene</button>
+        <button id="b-reset" class="ghost">Reset</button>
+      </div>
+      <div class="row">
+        <input id="text" type="text" maxlength="200" placeholder="Hand me the red one on my left"
+               aria-label="Request" autocomplete="off">
+      </div>
+      <div class="row">
+        <label class="switch"><input id="curio" type="checkbox" checked><span class="track"></span>
+          <span id="curio-t">Curio on</span></label>
+        <span class="spacer"></span>
+        <button id="b-cancel" class="ghost" disabled>Cancel</button>
+        <button id="b-compare">Off vs on</button>
+        <button id="b-run" class="primary">Run</button>
+      </div>
+      <div class="fine" id="scene-line"></div>
+    </div>
+
+    <div class="card">
+      <h2>Curio interpretation <span class="spacer"></span><span id="int-tag" class="badge live" hidden>live</span></h2>
+      <div id="interp"><div class="empty">Type a request and press Run.</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Raw vs Curio vs ground truth</h2>
+      <div class="compare">
+        <div class="col"><h3>Curio off</h3><div id="c-off" class="empty">not run</div></div>
+        <div class="col"><h3>Curio on</h3><div id="c-on" class="empty">not run</div></div>
+        <div class="col"><h3>Ground truth</h3><div id="c-or" class="empty">not run</div></div>
+      </div>
+      <div class="fine">"Off vs on" runs the same scene and the same words twice, robot camera only and then fused with the head camera. Single live episodes.</div>
+    </div>
+
+    <div class="card">
+      <h2>Measured A/B <span class="spacer"></span>
+        <button id="b-ab" class="ghost">Measure 50 / scene</button></h2>
+      <div id="ab"><div class="empty">Not measured in this session. Runs the sim A/B on this machine (about a minute).</div></div>
+    </div>
+
+    <div class="card">
+      <h2>This session</h2>
+      <div class="scroll"><table><thead><tr><th>Time</th><th>Request</th><th>Curio</th><th>Result</th><th></th></tr></thead>
+        <tbody id="hist"></tbody></table></div>
+      <div class="fine">Every live run is recorded. ⟲ replays the recording, labelled REPLAY.</div>
+    </div>
+
+    <div class="card">
+      <h2>System</h2>
+      <div id="pre"></div>
+      <h2 style="margin-top:14px">Pretrained-policy drop-ins</h2>
+      <div id="drops"></div>
+      <div class="fine">Arm motion in this demo is scripted IK to Curio's target, not a learned policy. Policy results above are as recorded in the repo.</div>
+    </div>
+  </aside>
+</main>
+
+<div class="toast" id="toast" role="alert"></div>
+<div class="caption" id="caption"></div>
+<div class="overlay" id="down"><div><h1>Simulator not available</h1><p id="down-t"></p></div></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const VERDICT = {correct: "correct", wrong: "wrong", not_found: "not found", unknown: "unknown"};
+// Showcase scenes: chosen because the robot-only reading differs from the person's here.
+const SHOWCASE = [
+  {kind: "perspective", seed: 0, say: "Two blocks of the same colour. The person asks for one by their own side.",
+   sub: "Their left is the robot's right. First the robot camera alone, then Curio."},
+  {kind: "occlusion", seed: 1, say: "The blue block is behind a box. The robot's camera can't see it.",
+   sub: "The person can. Curio fuses their view into the map."},
+];
+
+let state = {}, lastScene = null, connected = false, showcaseOn = false, waiters = [];
+
+function api(path, body) {
+  return fetch(path, {method: "POST", headers: {"Content-Type": "application/json"},
+                      body: JSON.stringify(body || {})})
+    .then(async r => { const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || r.statusText); return j; });
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", 5000); }
+function act(path, body) { return api(path, body).catch(e => { toast(e.message); throw e; }); }
+
+function stage(on, done) {
+  document.querySelectorAll(".stage").forEach(el => {
+    const s = el.dataset.s; el.classList.toggle("on", s === on);
+    el.classList.toggle("done", (done || []).includes(s));
+  });
+}
+function setMode() {
+  const m = $("mode"), t = $("mode-t");
+  const replay = document.body.classList.contains("replaying");
+  m.className = "badge " + (!connected ? "down" : replay ? "replay" : "live");
+  t.textContent = !connected ? "disconnected" : replay ? "replay" : "live";
+}
+
+function renderState(s) {
+  Object.assign(state, s);
+  const busy = !!state.busy;
+  $("busy").hidden = !busy; $("busy-t").textContent = busy ? state.busy : "";
+  for (const id of ["b-run", "b-compare", "b-load", "b-reset", "b-ab", "b-showcase"]) $(id).disabled = busy || showcaseOn && id !== "b-showcase";
+  $("b-cancel").disabled = !busy;
+  if (state.scenes && !$("kind").options.length)
+    $("kind").innerHTML = state.scenes.map(k => `<option>${esc(k)}</option>`).join("");
+  if (state.scene) {
+    const key = state.scene.kind + ":" + state.scene.seed;
+    if (key !== lastScene) { lastScene = key; $("text").value = state.scene.request;
+      $("kind").value = state.scene.kind; $("seed").value = state.scene.seed; }
+    $("scene-line").textContent = `Scene ${state.scene.kind} · seed ${state.scene.seed} · its own request: “${state.scene.request}”`;
+  }
+  if (state.error) { $("down-t").textContent = state.error; $("down").style.display = "flex"; }
+  renderHist(); renderAB(); renderSystem();
+  if (!busy) { const w = waiters; waiters = []; w.forEach(f => f()); }
+}
+function idle() { return new Promise(res => state.busy ? waiters.push(res) : res()); }
+
+function renderHist() {
+  const h = (state.history || []).slice().reverse();
+  const rec = (state.recordings || []);
+  $("hist").innerHTML = h.length ? h.map((r, i) => {
+    const rid = rec.find(x => x.at === r.at && x.text === r.text && x.curio === r.curio);
+    return `<tr><td class="mono">${esc(r.at)}</td><td class="t">${esc(r.text)}<br><small class="sub">${esc(r.scene.kind)} · ${r.scene.seed}</small></td>
+      <td>${r.curio ? "on" : "off"}</td><td><span class="v ${r.verdict}">${VERDICT[r.verdict]}</span></td>
+      <td>${rid ? `<button class="ghost" data-rid="${esc(rid.id)}" title="Replay recording">⟲</button>` : ""}</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="empty">No runs yet.</td></tr>`;
+}
+$("hist").addEventListener("click", e => { const b = e.target.closest("button[data-rid]");
+  if (b) act("/api/replay", {id: b.dataset.rid}); });
+
+function renderAB() {
+  const a = state.ab; if (!a) return;
+  const rows = Object.entries(a.success_rate_pct).map(([k, v]) => `
+    <div class="bar"><span>${esc(k)} · off</span><div class="track2"><div class="fill off" style="width:${v.off}%"></div></div><span class="mono">${v.off}%</span></div>
+    <div class="bar"><span>${esc(k)} · on</span><div class="track2"><div class="fill on" style="width:${v.on}%"></div></div><span class="mono">${v.on}%</span></div>`).join("");
+  $("ab").innerHTML = `<div class="bars">${rows}</div><div class="fine">Measured ${esc(a.measured_at)} on this machine in ${a.seconds} s:
+    ${a.trials_per_scenario} scenes per kind, seed ${a.seed}, success = target within ${a.success_radius_m * 100} cm of the correct block.
+    Rule pipeline, exact head pose. Aggregate, not the single run above.</div>`;
+}
+
+function renderSystem() {
+  if (state.preflight) $("pre").innerHTML = state.preflight.map(c => {
+    const st = c.ok === true ? ["y", "✓"] : c.ok === false ? ["n", "✕"] : ["na", "–"];
+    return `<div class="check"><span class="st ${st[0]}">${st[1]}</span><span>${esc(c.name)}<small>${esc(c.detail)}</small></span></div>`;
+  }).join("");
+  if (state.dropins) $("drops").innerHTML = state.dropins.map(d => `
+    <div class="drop"><b>${esc(d.card)}</b> <span class="chip">${esc(d.status)}</span> ${esc(d.what)}
+      <small>${esc(d.result)} · ${esc(d.source)}</small></div>`).join("");
+}
+
+function interpHTML(r) {
+  const p = r.parsed, t = r.target_id;
+  const objs = r.objects.map(o => `<span class="chip ${o.id === t ? "target" : ""}">${esc(o.id)}
+      <span style="color:var(--robot)">${o.seen_by.includes("robot") ? "R" : ""}</span><span style="color:var(--head)">${o.seen_by.includes("human") ? "H" : ""}</span></span>`).join("");
+  const ms = r.timings_ms;
+  return `<dl>
+    <dt>Request</dt><dd>“${esc(r.text)}”</dd>
+    <dt>Parsed</dt><dd>colour <b>${esc(p.color ?? "any")}</b> · relation <b>${esc(p.relation ?? "none")}</b> · frame <b>${p.frame === "speaker" ? "the person's" : "the robot's"}</b></dd>
+    <dt>Cameras</dt><dd>${r.curio ? "robot + head camera (Curio on)" : "robot camera only (Curio off)"}</dd>
+    <dt>Map</dt><dd>${objs || '<span class="empty">empty</span>'}</dd>
+    <dt>Target</dt><dd><b>${esc(t ?? "none")}</b> · ${esc(r.reason)}</dd>
+    <dt>Truth</dt><dd>${esc(r.oracle.why)}</dd>
+    <dt>Result</dt><dd><span class="v ${r.verdict}">${VERDICT[r.verdict]}</span></dd>
+    <dt>Latency</dt><dd class="mono">detect ${ms.detect} · fuse ${ms.fuse} · resolve ${ms.resolve} ms</dd>
+    ${r.motion ? `<dt>Motion</dt><dd>${esc(r.motion.status)} in ${r.motion.s} s${r.motion.error_to_oracle_m != null ? ` · ${(r.motion.error_to_oracle_m * 100).toFixed(1)} cm from truth` : ""}</dd>` : ""}
+  </dl>`;
+}
+function colHTML(r) {
+  return `<span class="v ${r.verdict}">${VERDICT[r.verdict]}</span><p><b>${esc(r.target_id ?? "nothing")}</b><br>${esc(r.reason)}</p>`;
+}
+
+function onEvent(ev) {
+  switch (ev.type) {
+    case "state": renderState(ev); break;
+    case "frame":
+      document.body.classList.toggle("replaying", !!ev.replay); setMode();
+      for (const [k, v] of Object.entries(ev.panes)) $("img-" + k).src = "data:image/jpeg;base64," + v;
+      break;
+    case "interpretation":
+      $("interp").innerHTML = interpHTML(ev);
+      $("int-tag").hidden = false; $("int-tag").className = "badge " + (ev.replay ? "replay" : "live");
+      $("int-tag").textContent = ev.replay ? "replay" : "live";
+      $("pane-head").classList.toggle("dim", !ev.curio);
+      stage("robot", ["head", "req", "curio", "goal"]);
+      break;
+    case "result":
+      $("interp").innerHTML = interpHTML(ev); stage(null, ["head", "req", "curio", "goal", "robot"]);
+      if (ev.compare) {
+        $(ev.curio ? "c-on" : "c-off").innerHTML = colHTML(ev);
+        $("c-or").innerHTML = `<span class="v unknown">truth</span><p>${esc(ev.oracle.why)}</p>`;
+        $("c-or").classList.remove("empty"); $(ev.curio ? "c-on" : "c-off").classList.remove("empty");
+      }
+      break;
+    case "replay":
+      document.body.classList.toggle("replaying", ev.phase === "start"); setMode(); break;
+    case "error": toast(`${ev.job}: ${ev.message}`); break;
+  }
+}
+
+function connect() {
+  const es = new EventSource("/api/events");
+  es.onopen = () => { connected = true; setMode(); };
+  es.onmessage = m => { try { onEvent(JSON.parse(m.data)); } catch (e) { console.error(e); } };
+  es.onerror = () => { connected = false; setMode(); };
+}
+async function refresh() { try { const r = await fetch("/api/state"); renderState(await r.json()); } catch {} }
+
+$("curio").addEventListener("change", () => { $("curio-t").textContent = $("curio").checked ? "Curio on" : "Curio off"; });
+$("b-load").onclick = () => act("/api/load", {kind: $("kind").value, seed: +$("seed").value || 0});
+$("b-reset").onclick = () => act("/api/reset");
+$("b-cancel").onclick = () => api("/api/cancel");
+$("b-ab").onclick = () => act("/api/ab", {trials: 50});
+function run(curio) { stage("curio", ["head", "req"]); return act("/api/run", {text: $("text").value, curio}); }
+$("b-run").onclick = () => run($("curio").checked);
+$("b-compare").onclick = () => { stage("curio", ["head", "req"]); act("/api/compare", {text: $("text").value}); };
+$("text").addEventListener("keydown", e => { if (e.key === "Enter" && !state.busy) run($("curio").checked); });
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === " ") { e.preventDefault(); $("curio").click(); }
+  if (e.key === "Escape") api("/api/cancel");
+});
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function caption(text, sub) { const c = $("caption");
+  if (!text) { c.style.display = "none"; return; }
+  c.innerHTML = esc(text) + (sub ? `<small>${esc(sub)}</small>` : ""); c.style.display = "block"; }
+$("b-showcase").onclick = async () => {
+  if (showcaseOn) { showcaseOn = false; caption(); api("/api/cancel"); renderState({}); return; }
+  showcaseOn = true; $("b-showcase").textContent = "■ Stop"; renderState({});
+  try {
+    caption("Curio lets a robot follow your words from your side of the table.",
+            "Live: the real Curio pipeline on simulated cameras. Arm motion is scripted.");
+    await sleep(3500);
+    for (const s of SHOWCASE) {
+      if (!showcaseOn) break;
+      await act("/api/load", {kind: s.kind, seed: s.seed}); await sleep(300); await idle();
+      caption(s.say, s.sub); await sleep(3500);
+      if (!showcaseOn) break;
+      caption(`“${state.scene.request}”`, "Robot camera only (Curio off)...");
+      $("curio").checked = false; $("curio").dispatchEvent(new Event("change"));
+      await run(false); await sleep(300); await idle(); await sleep(2000);
+      if (!showcaseOn) break;
+      caption(`“${state.scene.request}”`, "Now with the person's view (Curio on)...");
+      $("curio").checked = true; $("curio").dispatchEvent(new Event("change"));
+      await run(true); await sleep(300); await idle(); await sleep(2500);
+    }
+    if (showcaseOn) { caption("Same words, same scene. The only change is whose view Curio uses.",
+      "Try your own request in the box."); await sleep(4500); }
+  } catch (e) { /* toast already shown */ }
+  showcaseOn = false; caption(); $("b-showcase").textContent = "▶ Showcase"; renderState({});
+};
+
+connect(); refresh(); setInterval(refresh, 10000);
+</script>
+</body>
+</html>
