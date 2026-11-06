@@ -45,7 +45,9 @@ from curio_robot.sim.shots import _font
 from curio_robot.sim.world import HUMAN_GROUP, SimWorld
 from curio_robot.types import HUMAN_CAM, ROBOT_CAM
 
-INSET = (384, 288)  # insets are drawn at PANE (the detection resolution) and scaled to this
+INSET_FRACTION = 0.24  # inset width as a share of the window, kept 4:3
+INSET_MIN, INSET_MAX = 260, 560  # pixels
+MARGIN = 14
 INSET_PERIOD = 0.5  # robot-inset refresh while the arm moves; each render costs ~70 ms here
 LOOP_HZ = 30
 VIEWER_SHADOW = 2048
@@ -107,6 +109,7 @@ class ViewerDemo:
         self._next_inset = 0.0
         self._head: Image.Image | None = None
         self._robot: Image.Image | None = None
+        self._placed_for: tuple[int, int] | None = None
         self._texts_shown: list | None = None
         self.compare: dict[bool, dict] = {}
         self.say: Callable[[str], None] = lambda text: None  # voice reply, if voice is on
@@ -240,6 +243,9 @@ class ViewerDemo:
         elif self.goal is not None and now >= self._next_inset:
             self._next_inset = now + INSET_PERIOD
             self._insets(head=False)
+        vp = self.v.viewport
+        if vp is not None and (vp.width, vp.height) != self._placed_for:
+            self._place()  # the window was resized (e.g. full screen): re-anchor, no re-render
         self._texts()
 
     def _insets(self, head: bool, robot: bool = True) -> None:
@@ -251,20 +257,26 @@ class ViewerDemo:
             img = draw_camera(self.world.render_camera(HUMAN_CAM), om, cid, used)
             _label(img, "HUMAN VIEW  head camera", (80, 200, 235), "" if used else "NOT USED")
             self._head = img
-        head_img = self._head
         if robot or self._robot is None:
             img = draw_camera(self.world.render_camera(ROBOT_CAM), om, cid, True)
             _label(img, "ROBOT VIEW  its camera", (255, 170, 60))
             self._robot = img
-        robot_img = self._robot
+        self._place()
+
+    def _place(self) -> None:
+        """Stack the two insets in the window's top-right corner, sized to the window."""
         vp = self.v.viewport
-        if vp is None:
+        if vp is None or self._head is None or self._robot is None:
             return
-        w, h = INSET
+        self._placed_for = (vp.width, vp.height)
+        w = int(min(max(vp.width * INSET_FRACTION, INSET_MIN), INSET_MAX))
+        w = min(w, max(1, (vp.height - 3 * MARGIN) * 2 // 3))  # both must fit vertically
+        h = w * 3 // 4
         imgs = []
-        for i, img in enumerate((head_img, robot_img)):
-            rect = mujoco.MjrRect(vp.width - w - 12, vp.height - (h + 12) * (i + 1), w, h)
-            imgs.append((rect, np.ascontiguousarray(np.asarray(img.resize(INSET)))))
+        for i, img in enumerate((self._head, self._robot)):
+            rect = mujoco.MjrRect(vp.width - w - MARGIN, vp.height - (h + MARGIN) * (i + 1), w, h)
+            small = img.resize((w, h), Image.Resampling.LANCZOS)
+            imgs.append((rect, np.ascontiguousarray(np.asarray(small))))
         self.v.set_images(imgs)
 
     def _texts(self) -> None:
@@ -293,7 +305,7 @@ class ViewerDemo:
                            f'{VERDICT[on["verdict"]]}  {on["target_id"] or "none"}')))
         texts.append((int(mujoco.mjtFontScale.mjFONTSCALE_100),
                       int(mujoco.mjtGridPos.mjGRID_BOTTOMRIGHT), "CURIO",
-                      "simulation  ·  type in the terminal  ·  h for help"))
+                      "simulation  |  say \"Curio, ...\" or type  |  h for help"))
         if texts != self._texts_shown:  # set_texts waits on the render thread (26-97 ms here)
             self._texts_shown = texts
             self.v.set_texts(texts)
@@ -384,7 +396,7 @@ def main() -> None:
     if kind not in SCENARIOS:
         p.error(f"scene kind must be one of {sorted(SCENARIOS)}")
 
-    world = SimWorld(*PANE)  # detection runs at the console's resolution
+    world = SimWorld(*PANE, person_body=True)  # detection at the console's resolution
     # The viewer builds its own GL context from these settings at launch; the offscreen
     # renderer above already exists, so detection renders are unchanged. 8192 is costly on
     # integrated graphics.
@@ -396,8 +408,8 @@ def main() -> None:
         with mujoco.viewer.launch_passive(world.model, world.data, show_left_ui=False,
                                           show_right_ui=False) as v:
             v.opt.geomgroup[HUMAN_GROUP] = 1  # show the person's head in the main view
-            v.cam.lookat[:] = (0.24, 0.0, 0.03)
-            v.cam.distance, v.cam.azimuth, v.cam.elevation = 1.05, 90.0, -38.0
+            v.cam.lookat[:] = (0.28, 0.0, 0.0)  # robot and person face to face
+            v.cam.distance, v.cam.azimuth, v.cam.elevation = 1.5, 60.0, -30.0
             demo = ViewerDemo(v, world)
             demo.load(kind, int(seed or 0))
             print(HELP, flush=True)

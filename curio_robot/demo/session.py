@@ -342,7 +342,7 @@ class DemoSession:
         self.last_frame: dict | None = None  # all three panes, for a client that joins late
         self._pane = pane
         self._fps, self._speed = fps, speed
-        self._factory = world_factory or (lambda: SimWorld(*pane))
+        self._factory = world_factory or (lambda: SimWorld(*pane, person_body=True))
         self.record_dir = record_dir
         self._jobs: queue.Queue[tuple[str, dict] | None] = queue.Queue()
         self._lock = threading.Lock()

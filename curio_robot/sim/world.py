@@ -47,7 +47,46 @@ def _quat_from_rotation(r: np.ndarray) -> np.ndarray:
     return q
 
 
-def build_model() -> mujoco.MjModel:
+PERSON_EYE_Z = 0.38  # the seated body is built for this eye height; arms rest on the table
+SHIRT = [0.27, 0.38, 0.55, 1]
+SKIN = [0.87, 0.72, 0.6, 1]
+TROUSERS = [0.18, 0.19, 0.22, 1]
+CHAIR = [0.35, 0.3, 0.27, 1]
+
+
+def _add_person_body(w) -> None:
+    """A seated person: torso, arms resting on the table edge, legs under it, a chair.
+
+    Built in a frame at eye height facing +x (towards the table), turned by set_human. In the
+    head's group, so it never blocks the person's own camera; it carries no collisions. Only
+    the demo builds it (SimWorld(person_body=True)); experiments render without it."""
+    body = w.add_body(name="human_body", pos=OFF_TABLE.tolist())
+    capsule, sphere, box = (mujoco.mjtGeom.mjGEOM_CAPSULE, mujoco.mjtGeom.mjGEOM_SPHERE,
+                            mujoco.mjtGeom.mjGEOM_BOX)
+
+    def part(kind, rgba, size, **where) -> None:
+        body.add_geom(type=kind, size=size, rgba=rgba, group=HUMAN_GROUP, contype=0,
+                      conaffinity=0, **where)
+
+    part(capsule, SKIN, [0.035, 0, 0], fromto=[-0.03, 0, -0.03, -0.14, 0, -0.13])  # neck
+    part(capsule, SHIRT, [0.12, 0, 0], fromto=[-0.18, 0, -0.2, -0.18, 0, -0.5])  # torso
+    for s in (1, -1):
+        shoulder = [-0.17, 0.17 * s, -0.16]
+        elbow = [-0.03, 0.21 * s, -0.355]
+        wrist = [0.14, 0.12 * s, -0.36]
+        part(sphere, SHIRT, [0.06, 0, 0], pos=shoulder)
+        part(capsule, SHIRT, [0.045, 0, 0], fromto=[*shoulder, *elbow])  # upper arm
+        part(capsule, SKIN, [0.032, 0, 0], fromto=[*elbow, *wrist])  # forearm on the table
+        part(sphere, SKIN, [0.038, 0, 0], pos=[0.17, 0.11 * s, -0.36])  # hand
+        hip, knee = [-0.18, 0.09 * s, -0.62], [0.08, 0.1 * s, -0.66]
+        part(capsule, TROUSERS, [0.065, 0, 0], fromto=[*hip, *knee])  # thigh
+        part(capsule, TROUSERS, [0.05, 0, 0], fromto=[*knee, 0.08, 0.1 * s, -1.08])  # shin
+        part(capsule, TROUSERS, [0.045, 0, 0], fromto=[0.06, 0.1 * s, -1.1, 0.16, 0.1 * s, -1.1])
+    part(box, CHAIR, [0.2, 0.21, 0.02], pos=[-0.2, 0, -0.71])  # seat
+    part(box, CHAIR, [0.02, 0.21, 0.25], pos=[-0.4, 0, -0.45])  # back
+
+
+def build_model(person_body: bool = False) -> mujoco.MjModel:
     spec = mujoco.MjSpec.from_file(str(SO101_XML))
     spec.visual.global_.offwidth = 1920
     spec.visual.global_.offheight = 1080
@@ -83,6 +122,8 @@ def build_model() -> mujoco.MjModel:
                   pos=[0, 0, 0.09], rgba=[0.87, 0.72, 0.6, 1], group=HUMAN_GROUP)
     head.add_geom(type=mujoco.mjtGeom.mjGEOM_BOX, size=[0.035, 0.008, 0.02],
                   pos=[0, 0, 0], rgba=[0.1, 0.1, 0.12, 1], group=HUMAN_GROUP)
+    if person_body:
+        _add_person_body(w)
 
     w.add_camera(name=ROBOT_CAM, fovy=62)
     w.add_camera(name=HUMAN_CAM, fovy=70)
@@ -97,8 +138,9 @@ class BlockSpec:
 
 
 class SimWorld:
-    def __init__(self, width: int = 320, height: int = 240) -> None:
-        self.model = build_model()
+    def __init__(self, width: int = 320, height: int = 240, person_body: bool = False) -> None:
+        self.model = build_model(person_body)
+        self._person_body = person_body
         self.data = mujoco.MjData(self.model)
         self.width, self.height = width, height
         self.renderer = mujoco.Renderer(self.model, height, width)
@@ -151,6 +193,11 @@ class SimWorld:
         back[2] = 0
         back /= np.linalg.norm(back)
         head.pos[:] = eye + 0.04 * back
+        if self._person_body:
+            body = self.model.body("human_body")
+            yaw = float(np.arctan2(-back[1], -back[0]))  # facing where they look
+            body.pos[:] = [eye[0], eye[1], PERSON_EYE_Z]
+            body.quat[:] = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
         mujoco.mj_forward(self.model, self.data)
 
     def _set_camera(self, name: str, eye: np.ndarray, look: np.ndarray) -> None:
