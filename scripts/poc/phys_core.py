@@ -6,6 +6,7 @@ Everything here is plain maths on numpy arrays so the tests can check it without
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
@@ -13,7 +14,19 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-TP = Path("C:/Users/Rohan/dev/Perspective/third_party")
+
+def third_party() -> Path:
+    """Where the downloads live: $CURIO_THIRD_PARTY, else this checkout's third_party/, else
+    the GPU box's main checkout (T5-20's machine). The first that has the Go2 model wins."""
+    env = os.environ.get("CURIO_THIRD_PARTY")
+    here = Path(__file__).resolve().parents[2] / "third_party"
+    for tp in ([Path(env)] if env else []) + [here, Path("C:/Users/Rohan/dev/Perspective/third_party")]:
+        if (tp / "mujoco_menagerie/unitree_go2/go2.xml").exists():
+            return tp
+    return here
+
+
+TP = third_party()
 G1_DIR = TP / "unitree_rl_gym"
 G1_XML = G1_DIR / "resources/robots/g1_description/g1_12dof.xml"
 G1_YAML = G1_DIR / "deploy/deploy_mujoco/configs/g1.yaml"

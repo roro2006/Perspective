@@ -50,8 +50,23 @@ COMMANDS = {
     "go to the end": "seat 90", "go to the other end": "seat -90",
 }
 
+# The dog demo (T5-34): a firefighter sends the Go2 to a room. Its requests are what the rule
+# resolver reads there (left / right, mine or yours); "room" is not a colour, so it ranks both.
+DOG_OPENERS = ("the survivor's in the room", "survivor's in the room", "search the room",
+               "go to the room", "check the room", "go check the room")
+DOG_SIDES = ("on my left", "on my right", "on your left", "on your right")
+DOG_COMMANDS = {
+    "on": "on", "turn on": "on", "switch on": "on",
+    "off": "off", "turn off": "off", "switch off": "off",
+    "compare": "c", "compare both": "c", "show the difference": "c",
+    "reset": "r", "reset the scene": "r",
+    "turn around": "turn", "face the other way": "turn", "about face": "turn",
+}
 
-def requests() -> list[str]:
+
+def requests(robot: str = "arm") -> list[str]:
+    if robot == "dog":
+        return [f"{o} {side}" for o in DOG_OPENERS for side in DOG_SIDES]
     out = []
     for verb in VERBS:
         for color in COLORS:
@@ -61,16 +76,20 @@ def requests() -> list[str]:
     return out
 
 
-def phrases() -> list[str]:
-    return [f"{WAKE} {p}" for p in (*requests(), *COMMANDS)]
+def commands(robot: str = "arm") -> dict[str, str]:
+    return DOG_COMMANDS if robot == "dog" else COMMANDS
 
 
-def to_command(text: str) -> str | None:
+def phrases(robot: str = "arm") -> list[str]:
+    return [f"{WAKE} {p}" for p in (*requests(robot), *commands(robot))]
+
+
+def to_command(text: str, robot: str = "arm") -> str | None:
     """A recognized phrase -> the terminal command it means (a request is its own words)."""
     words = text.lower().strip().removeprefix(WAKE).strip(" ,")
     if not words:
         return None
-    return COMMANDS.get(words, words)
+    return commands(robot).get(words, words)
 
 
 def available() -> bool:
@@ -86,16 +105,17 @@ class Listener:
 
     def __init__(self, on_command: Callable[[str, str, float], None],
                  on_status: Callable[[str], None] | None = None,
-                 wave_file: Path | None = None) -> None:
+                 wave_file: Path | None = None, robot: str = "arm") -> None:
         self._on_command = on_command
         self._on_status = on_status or (lambda s: None)
         self._wave = wave_file
+        self._robot = robot
         self._proc: subprocess.Popen | None = None
         self._speaking_until = 0.0
         self._say_lock = threading.Lock()
         self._dir = tempfile.TemporaryDirectory(prefix="curio-voice-")
         self._phrases = Path(self._dir.name) / "phrases.txt"
-        self._phrases.write_text("\n".join(phrases()), encoding="utf-8")
+        self._phrases.write_text("\n".join(phrases(robot)), encoding="utf-8")
         self.ready = threading.Event()
         self.lines: list[str] = []
 
@@ -136,7 +156,7 @@ class Listener:
             if conf < MIN_CONFIDENCE:
                 self._on_status(f'not sure I heard "{text}" ({conf:.2f})')
                 continue
-            cmd = to_command(text)
+            cmd = to_command(text, self._robot)
             if cmd is not None:
                 self._on_command(cmd, text, conf)
         self._on_status("voice stopped")

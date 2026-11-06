@@ -16,13 +16,13 @@ from pathlib import Path
 
 import numpy as np
 
-TP = Path("C:/Users/Rohan/dev/Perspective/third_party")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from phys_core import TP
+from phys_policy import G1Policy, MlpPolicy
+
 G1_PT = TP / "unitree_rl_gym/deploy/pre_train/g1/motion.pt"
 GO2_ONNX = TP / "cagataydev__strands-isaaclab-go2-rough-policy/exported/policy.onnx"
 OUT = TP / "derived"
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from phys_policy import G1Policy, MlpPolicy
 
 # ---- a minimal protobuf reader, enough for ONNX initializers and nodes ---------------------
 
@@ -130,13 +130,9 @@ def export_g1() -> None:
 
 
 def export_go2() -> None:
-    import onnxruntime as ort
     inits, nodes = onnx_graph(GO2_ONNX)
     print("go2 ops:", [op for op, _, _ in nodes])
     print("go2 initializers:", {k: v.shape for k, v in inits.items()})
-    sess = ort.InferenceSession(str(GO2_ONNX), providers=["CPUExecutionProvider"])
-    inp = sess.get_inputs()[0]
-    print("go2 input:", inp.name, inp.shape, "output:", [o.shape for o in sess.get_outputs()])
     # The graph is Gemm, Elu, Gemm, Elu, Gemm, Elu, Gemm (torch Linear: B is (out, in)).
     ops = [op for op, _, _ in nodes]
     assert set(ops) == {"Gemm", "Elu"}, f"unexpected ops {ops}"
@@ -145,6 +141,14 @@ def export_go2() -> None:
         w[f"w{layer}"], w[f"b{layer}"] = inits[ins[1]], inits[ins[2]]
     np.savez(OUT / "go2_rough.npz", **w)
     pol = MlpPolicy(OUT / "go2_rough.npz")
+    try:  # the check needs onnxruntime (T5-20 ran it in the lerobot-rocm venv)
+        import onnxruntime as ort
+    except ImportError:
+        print(f"go2: {len(w) // 2} layers written; onnxruntime not installed, check skipped")
+        return
+    sess = ort.InferenceSession(str(GO2_ONNX), providers=["CPUExecutionProvider"])
+    inp = sess.get_inputs()[0]
+    print("go2 input:", inp.name, inp.shape, "output:", [o.shape for o in sess.get_outputs()])
     rng = np.random.default_rng(0)
     x = rng.normal(0, 1, (64, int(inp.shape[1]))).astype(np.float32)
     ref = np.concatenate([sess.run(None, {inp.name: r[None]})[0] for r in x])
@@ -155,5 +159,6 @@ def export_go2() -> None:
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    export_g1()
+    if "--go2" not in sys.argv:  # --go2: the dog only (the G1 export needs torch)
+        export_g1()
     export_go2()

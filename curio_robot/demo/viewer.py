@@ -1,6 +1,7 @@
 """The demo in MuJoCo's own viewer window (T5-33): no browser.
 
     uv run python -m curio_robot.demo.viewer [--scene perspective:0]
+    uv run python -m curio_robot.demo.viewer --robot dog      (the rescue dog, demo/dog.py)
 
 The main view is the live SO-101 scene. Two insets show what the cameras see right now: the
 person's head camera and the robot's camera, rings on what each detected, a thick magenta ring
@@ -370,7 +371,7 @@ def _read_stdin(lines: queue.Queue[str | None]) -> None:
     lines.put(None)
 
 
-def _start_voice(demo: ViewerDemo, lines: queue.Queue[str | None]):
+def _start_voice(demo, lines: queue.Queue[str | None], robot: str = "arm"):
     """Say "Curio, ..." instead of typing. Commands join the terminal's queue."""
     if not voice.available():
         demo.voice_line = "unavailable on this system (terminal only)"
@@ -385,12 +386,12 @@ def _start_voice(demo: ViewerDemo, lines: queue.Queue[str | None]):
     def status(s: str) -> None:
         demo.voice_line = 'listening: say "Curio, ..."' if s == "listening" else s
 
-    listener = voice.Listener(heard, status)
+    listener = voice.Listener(heard, status, robot=robot)
     demo.voice_line = "starting the microphone..."
     listener.start()
     demo.say = listener.say
-    print('Voice: say "Curio, hand me the red one on my left". The terminal still works.',
-          flush=True)
+    example = getattr(demo, "VOICE_EXAMPLE", "Curio, hand me the red one on my left")
+    print(f'Voice: say "{example}". The terminal still works.', flush=True)
     return listener
 
 
@@ -399,7 +400,12 @@ def main() -> None:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scene", default="perspective:0", help="first scene, kind:seed")
     p.add_argument("--no-voice", action="store_true", help="terminal only, no microphone")
+    p.add_argument("--robot", choices=("arm", "dog"), default="arm",
+                   help="arm: the SO-101 table demo (T5-33); dog: the rescue Go2 (T5-34)")
     args = p.parse_args()
+    if args.robot == "dog":
+        _main_dog(args.no_voice)
+        return
     kind, _, seed = args.scene.partition(":")
     if kind not in SCENARIOS:
         p.error(f"scene kind must be one of {sorted(SCENARIOS)}")
@@ -422,29 +428,60 @@ def main() -> None:
             demo.load(kind, int(seed or 0))
             print(HELP, flush=True)
             listener = _start_voice(demo, lines) if not args.no_voice else None
-            period = 1.0 / LOOP_HZ
-            last = time.perf_counter()
-            while v.is_running():
-                now = time.perf_counter()
-                try:
-                    while True:
-                        line = lines.get_nowait()
-                        if line is None or not demo.command(line):
-                            v.close()
-                            break
-                except queue.Empty:
-                    pass
-                if not v.is_running():
-                    break
-                demo.tick(min(now - last, 0.25))
-                last = now
-                demo.draw(now)
-                v.sync()
-                time.sleep(max(0.0, period - (time.perf_counter() - now)))
+            _loop(v, demo, lines)
     finally:
         if listener is not None:
             listener.close()
         world.close()
+
+
+def _main_dog(no_voice: bool) -> None:
+    from curio_robot.demo import dog
+
+    if not dog.have_assets():
+        sys.exit("The Go2 model and walking policy aren't here: see third_party/README.md "
+                 "(fetch them, then uv run python scripts/poc/export_policies.py --go2).")
+    world = dog.DogWorld()
+    world.model.vis.quality.shadowsize = VIEWER_SHADOW
+    lines: queue.Queue[str | None] = queue.Queue()
+    listener = None
+    threading.Thread(target=_read_stdin, args=(lines,), daemon=True).start()
+    try:
+        with mujoco.viewer.launch_passive(world.model, world.data, show_left_ui=False,
+                                          show_right_ui=False) as v:
+            dog.setup_camera(v)
+            demo = dog.DogDemo(v, world)
+            demo.load()
+            print(dog.HELP, flush=True)
+            listener = _start_voice(demo, lines, "dog") if not no_voice else None
+            _loop(v, demo, lines)
+    finally:
+        if listener is not None:
+            listener.close()
+        world.close()
+
+
+def _loop(v, demo, lines: queue.Queue[str | None]) -> None:
+    """Commands, then the demo's tick and drawing, at LOOP_HZ until the window closes."""
+    period = 1.0 / LOOP_HZ
+    last = time.perf_counter()
+    while v.is_running():
+        now = time.perf_counter()
+        try:
+            while True:
+                line = lines.get_nowait()
+                if line is None or not demo.command(line):
+                    v.close()
+                    break
+        except queue.Empty:
+            pass
+        if not v.is_running():
+            break
+        demo.tick(min(now - last, 0.25))
+        last = now
+        demo.draw(now)
+        v.sync()
+        time.sleep(max(0.0, period - (time.perf_counter() - now)))
 
 
 if __name__ == "__main__":
